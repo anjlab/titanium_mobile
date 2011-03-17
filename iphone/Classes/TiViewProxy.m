@@ -538,16 +538,22 @@ LAYOUTPROPERTIES_SETTER(setMinHeight,minimumHeight,TiFixedValueRuleFromObject,[s
 		[view configurationSet];
 
 		pthread_rwlock_rdlock(&childrenLock);
-		for (id child in self.children)
+		NSArray * childrenArray = [[self children] copy];
+		pthread_rwlock_unlock(&childrenLock);
+		
+		for (id child in childrenArray)
 		{
 			TiUIView *childView = [(TiViewProxy*)child view];
 			[self insertSubview:childView forProxy:child];
 		}
-		pthread_rwlock_unlock(&childrenLock);
+		
+		[childrenArray release];
 		[self viewDidAttach];
 
 		// make sure we do a layout of ourselves
-		[self setSandboxBounds:view.bounds];
+		if(CGRectIsEmpty(sandboxBounds)){
+			[self setSandboxBounds:view.bounds];
+		}
 		[self relayout];
 		viewInitialized = YES;
 	}
@@ -809,14 +815,34 @@ LAYOUTPROPERTIES_SETTER(setMinHeight,minimumHeight,TiFixedValueRuleFromObject,[s
 	if (properties!=nil)
 	{
 		NSString *objectId = [properties objectForKey:@"id"];
-		if (objectId!=nil)
+		NSString* className = [properties objectForKey:@"className"];
+		NSMutableArray* classNames = [properties objectForKey:@"classNames"];
+		
+		NSString *type = [NSStringFromClass([self class]) stringByReplacingOccurrencesOfString:@"TiUI" withString:@""];
+		type = [[type stringByReplacingOccurrencesOfString:@"Proxy" withString:@""] lowercaseString];
+
+		TiStylesheet *stylesheet = [[[self pageContext] host] stylesheet];
+		NSString *basename = [[self pageContext] basename];
+		NSString *density = [TiUtils isRetinaDisplay] ? @"high" : @"medium";
+
+		if (objectId!=nil || className != nil || classNames != nil || [stylesheet basename:basename density:density hasClass:type])
 		{
-			TiStylesheet *stylesheet = [[[self pageContext] host] stylesheet];
-			NSString *density = [TiUtils isRetinaDisplay] ? @"high" : @"medium";
-			NSString *basename = [[self pageContext] basename];
-			NSString *type = [NSStringFromClass([self class]) stringByReplacingOccurrencesOfString:@"TiUI" withString:@""];
-			type = [[type stringByReplacingOccurrencesOfString:@"Proxy" withString:@""] lowercaseString];
-			NSDictionary *merge = [stylesheet stylesheet:objectId type:type density:density basename:basename];
+			// get classes from proxy
+			NSString *className = [properties objectForKey:@"className"];
+			NSMutableArray *classNames = [properties objectForKey:@"classNames"];
+			if (classNames==nil)
+			{
+				classNames = [NSMutableArray arrayWithCapacity:1];
+			}
+			if (className!=nil)
+			{
+				[classNames addObject:className];
+			}
+			// add the widget type as a class
+			// TODO: What takes prescedence here?  Other specified class names, or the widget class name?  That will change where
+			// the type gets inserted into the array.
+			[classNames addObject:type];
+			NSDictionary *merge = [stylesheet stylesheet:objectId density:density basename:basename classes:classNames];
 			if (merge!=nil)
 			{
 				// incoming keys take precendence over existing stylesheet keys
@@ -920,6 +946,10 @@ LAYOUTPROPERTIES_SETTER(setMinHeight,minimumHeight,TiFixedValueRuleFromObject,[s
 		RELEASE_TO_NIL(view);
 		[self viewDidDetach];
 	}
+
+    pthread_rwlock_rdlock(&childrenLock);
+    [[self children] makeObjectsPerformSelector:@selector(detachView)];
+    pthread_rwlock_unlock(&childrenLock);
 	[destroyLock unlock];
 }
 
@@ -1741,12 +1771,18 @@ if(OSAtomicTestAndSetBarrier(flagBit, &dirtyflags))	\
 	{
 		OSAtomicTestAndSetBarrier(NEEDS_LAYOUT_CHILDREN, &dirtyflags);
 	}
+
+//TODO: This is really expensive, but what can you do? Laying out the child needs the lock again.
 	pthread_rwlock_rdlock(&childrenLock);
-	for (id child in self.children)
+	NSArray * childrenArray = [[self children] copy];
+	pthread_rwlock_unlock(&childrenLock);
+	
+	for (id child in childrenArray)
 	{
 		[self layoutChild:child optimize:optimize];
 	}
-	pthread_rwlock_unlock(&childrenLock);
+	[childrenArray release];
+	
 	if (optimize==NO)
 	{
 		OSAtomicTestAndClearBarrier(NEEDS_LAYOUT_CHILDREN, &dirtyflags);

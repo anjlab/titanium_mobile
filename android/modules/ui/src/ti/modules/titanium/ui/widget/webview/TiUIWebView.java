@@ -22,10 +22,12 @@ import org.appcelerator.titanium.util.Log;
 import org.appcelerator.titanium.util.TiConfig;
 import org.appcelerator.titanium.util.TiConvert;
 import org.appcelerator.titanium.util.TiMimeTypeHelper;
+import org.appcelerator.titanium.view.TiBackgroundDrawable;
 import org.appcelerator.titanium.view.TiCompositeLayout;
 import org.appcelerator.titanium.view.TiUIView;
 
 import android.content.Context;
+import android.graphics.Color;
 import android.net.Uri;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -56,10 +58,16 @@ public class TiUIWebView extends TiUIView {
 	{
 		super(proxy);
 
+		if (proxy.getProperty(TiC.PROPERTY_SCALES_PAGE_TO_FIT) == null) {
+			proxy.setProperty(TiC.PROPERTY_SCALES_PAGE_TO_FIT, true);
+		}
+
 		TiWebView webView = new TiWebView(proxy.getContext());
 		webView.setVerticalScrollbarOverlay(true);
 
 		WebSettings settings = webView.getSettings();
+		settings.setBuiltInZoomControls(true);
+		settings.setUseWideViewPort(true);
 		settings.setJavaScriptEnabled(true);
 		settings.setSupportMultipleWindows(true);
 		settings.setJavaScriptCanOpenWindowsAutomatically(true);
@@ -88,6 +96,11 @@ public class TiUIWebView extends TiUIView {
 	public void processProperties(KrollDict d) {
 		super.processProperties(d);
 
+		if (d.containsKey(TiC.PROPERTY_SCALES_PAGE_TO_FIT)) {
+			WebSettings settings = getWebView().getSettings();
+			settings.setLoadWithOverviewMode(TiConvert.toBoolean(d, TiC.PROPERTY_SCALES_PAGE_TO_FIT));
+		}
+
 		if (d.containsKey(TiC.PROPERTY_URL)) {
 			setUrl(TiConvert.toString(d, TiC.PROPERTY_URL));
 		} else if (d.containsKey(TiC.PROPERTY_HTML)) {
@@ -97,6 +110,13 @@ public class TiUIWebView extends TiUIView {
 			if (value instanceof TiBlob) {
 				setData((TiBlob)value);
 			}
+		}
+
+		// If TiUIView's processProperties ended up making a TiBackgroundDrawable
+		// for the background, we must set the WebView background color to transparent
+		// in order to see any of it.
+		if (nativeView != null && nativeView.getBackground() instanceof TiBackgroundDrawable) {
+			nativeView.setBackgroundColor(Color.TRANSPARENT);
 		}
 	}
 
@@ -110,8 +130,19 @@ public class TiUIWebView extends TiUIView {
 			if (newValue instanceof TiBlob) {
 				setData((TiBlob)newValue);
 			}
+		} else if (TiC.PROPERTY_SCALES_PAGE_TO_FIT.equals(key)) {
+			WebSettings settings = getWebView().getSettings();
+			settings.setLoadWithOverviewMode(TiConvert.toBoolean(newValue));
 		} else {
 			super.propertyChanged(key, oldValue, newValue, proxy);
+		}
+
+		// If TiUIView's propertyChanged ended up making a TiBackgroundDrawable
+		// for the background, we must set the WebView background color to transparent
+		// in order to see any of it.
+		boolean isBgRelated = (key.startsWith(TiC.PROPERTY_BACKGROUND_PREFIX) || key.startsWith(TiC.PROPERTY_BORDER_PREFIX));
+		if (isBgRelated && nativeView != null && nativeView.getBackground() instanceof TiBackgroundDrawable) {
+			nativeView.setBackgroundColor(Color.TRANSPARENT);
 		}
 	}
 

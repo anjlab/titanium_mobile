@@ -13,6 +13,7 @@
 	NSDictionary* idsDictByDensity;
 }
 
--(id)stylesheet:(NSString*)objectId type:(NSString*)type density:(NSString*)density basename:(NSString*)basename;
+-(BOOL)basename:(NSString*)basename density:(NSString*)density hasClass:(NSString*)className;
+-(id)stylesheet:(NSString*)objectId density:(NSString*)density basename:(NSString*)basename classes:(NSArray*)classes;
 
 @end

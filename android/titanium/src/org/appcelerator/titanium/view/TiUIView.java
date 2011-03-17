@@ -7,6 +7,7 @@
 package org.appcelerator.titanium.view;
 
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -22,6 +23,7 @@ import org.appcelerator.titanium.TiDimension;
 import org.appcelerator.titanium.proxy.TiViewProxy;
 import org.appcelerator.titanium.util.Log;
 import org.appcelerator.titanium.util.TiAnimationBuilder;
+import org.appcelerator.titanium.util.TiAnimationBuilder.TiMatrixAnimation;
 import org.appcelerator.titanium.util.TiConfig;
 import org.appcelerator.titanium.util.TiConvert;
 import org.appcelerator.titanium.util.TiUIHelper;
@@ -35,10 +37,12 @@ import android.view.GestureDetector.SimpleOnGestureListener;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.View.OnClickListener;
 import android.view.View.OnFocusChangeListener;
 import android.view.View.OnKeyListener;
 import android.view.View.OnTouchListener;
 import android.view.ViewGroup;
+import android.view.animation.Animation;
 import android.view.animation.AnimationSet;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.AdapterView;
@@ -65,6 +69,12 @@ public abstract class TiUIView
 	protected int zIndex;
 	protected TiAnimationBuilder animBuilder;
 	protected TiBackgroundDrawable background;
+
+	private KrollDict lastUpEvent = new KrollDict(2);
+	// In the case of heavy-weight windows, the "nativeView" is null,
+	// so this holds a reference to the view which is used for touching,
+	// i.e., the view passed to registerForTouch.
+	private WeakReference<View> mTouchView = null;
 
 	public TiUIView(TiViewProxy proxy)
 	{
@@ -156,7 +166,7 @@ public abstract class TiUIView
 		if (proxy.hasProperty(TiC.PROPERTY_TOUCH_ENABLED)) {
 			clickable = TiConvert.toBoolean(proxy.getProperty(TiC.PROPERTY_TOUCH_ENABLED));
 		}
-		nativeView.setClickable(clickable);
+		doSetClickable(nativeView, clickable);
 		nativeView.setOnFocusChangeListener(this);
 	}
 
@@ -187,26 +197,60 @@ public abstract class TiUIView
 	public void listenerAdded(String type, int count, KrollProxy proxy) {
 	}
 
-	public void listenerRemoved(String type, int count, KrollProxy proxy) {
+	public void listenerRemoved(String type, int count, KrollProxy proxy){
 	}
 
-	private boolean hasImage(KrollDict d) {
+	private boolean hasImage(KrollDict d)
+	{
 		return d.containsKeyAndNotNull(TiC.PROPERTY_BACKGROUND_IMAGE)
 			|| d.containsKeyAndNotNull(TiC.PROPERTY_BACKGROUND_SELECTED_IMAGE) 
 			|| d.containsKeyAndNotNull(TiC.PROPERTY_BACKGROUND_FOCUSED_IMAGE)
 			|| d.containsKeyAndNotNull(TiC.PROPERTY_BACKGROUND_DISABLED_IMAGE);
 	}
 
-	private boolean hasBorder(KrollDict d) {
+	private boolean hasBorder(KrollDict d)
+	{
 		return d.containsKeyAndNotNull(TiC.PROPERTY_BORDER_COLOR) 
 			|| d.containsKeyAndNotNull(TiC.PROPERTY_BORDER_RADIUS)
 			|| d.containsKeyAndNotNull(TiC.PROPERTY_BORDER_WIDTH);
 	}
 
-	private boolean hasColorState(KrollDict d) {
+	private boolean hasColorState(KrollDict d)
+	{
 		return d.containsKeyAndNotNull(TiC.PROPERTY_BACKGROUND_SELECTED_COLOR)
 			|| d.containsKeyAndNotNull(TiC.PROPERTY_BACKGROUND_FOCUSED_COLOR)
 			|| d.containsKeyAndNotNull(TiC.PROPERTY_BACKGROUND_FOCUSED_COLOR);
+	}
+
+	protected void applyTransform(Ti2DMatrix matrix)
+	{
+		layoutParams.optionTransform = matrix;
+		if (animBuilder == null) {
+			animBuilder = new TiAnimationBuilder();
+		}
+		if (nativeView != null) {
+			if (matrix != null) {
+				TiMatrixAnimation matrixAnimation = animBuilder.createMatrixAnimation(matrix);
+				matrixAnimation.interpolate = false;
+				matrixAnimation.setDuration(1);
+				matrixAnimation.setFillAfter(true);
+				nativeView.startAnimation(matrixAnimation);
+			} else {
+				nativeView.clearAnimation();
+			}
+		}
+	}
+
+	protected void layoutNativeView()
+	{
+		if (nativeView != null) {
+			Animation a = nativeView.getAnimation();
+			if (a != null && a instanceof TiMatrixAnimation) {
+				TiMatrixAnimation matrixAnimation = (TiMatrixAnimation) a;
+				matrixAnimation.invalidateWithMatrix(nativeView);
+			}
+			nativeView.requestLayout();
+		}
 	}
 
 	public void propertyChanged(String key, Object oldValue, Object newValue, KrollProxy proxy)
@@ -217,41 +261,31 @@ public abstract class TiUIView
 			} else {
 				layoutParams.optionLeft = null;
 			}
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_TOP)) {
 			if (newValue != null) {
 				layoutParams.optionTop = TiConvert.toTiDimension(TiConvert.toString(newValue), TiDimension.TYPE_TOP);
 			} else {
 				layoutParams.optionTop = null;
 			}
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_CENTER)) {
 			TiConvert.updateLayoutCenter(newValue, layoutParams);
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_RIGHT)) {
 			if (newValue != null) {
 				layoutParams.optionRight = TiConvert.toTiDimension(TiConvert.toString(newValue), TiDimension.TYPE_RIGHT);
 			} else {
 				layoutParams.optionRight = null;
 			}
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_BOTTOM)) {
 			if (newValue != null) {
 				layoutParams.optionBottom = TiConvert.toTiDimension(TiConvert.toString(newValue), TiDimension.TYPE_BOTTOM);
 			} else {
 				layoutParams.optionBottom = null;
 			}
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_SIZE)) {
 			if (newValue instanceof KrollDict) {
 				KrollDict d = (KrollDict)newValue;
@@ -272,9 +306,7 @@ public abstract class TiUIView
 			} else {
 				layoutParams.optionHeight = null;
 			}
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_WIDTH)) {
 			if (newValue != null) {
 				if (!newValue.equals(TiC.SIZE_AUTO)) {
@@ -287,28 +319,25 @@ public abstract class TiUIView
 			} else {
 				layoutParams.optionWidth = null;
 			}
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_ZINDEX)) {
 			if (newValue != null) {
 				layoutParams.optionZIndex = TiConvert.toInt(TiConvert.toString(newValue));
 			} else {
 				layoutParams.optionZIndex = 0;
 			}
-			if (nativeView != null) {
-				nativeView.requestLayout();
-			}
+			layoutNativeView();
 		} else if (key.equals(TiC.PROPERTY_FOCUSABLE)) {
 			boolean focusable = TiConvert.toBoolean(proxy.getProperty(TiC.PROPERTY_FOCUSABLE));
 			nativeView.setFocusable(focusable);
 			if (focusable) {
 				registerForKeyClick(nativeView);
 			} else {
-				nativeView.setOnClickListener(null);
+				//nativeView.setOnClickListener(null); // ? mistake? I assume OnKeyListener was meant
+				nativeView.setOnKeyListener(null);
 			}
 		} else if (key.equals(TiC.PROPERTY_TOUCH_ENABLED)) {
-			nativeView.setClickable(TiConvert.toBoolean(newValue));
+			doSetClickable(TiConvert.toBoolean(newValue));
 		} else if (key.equals(TiC.PROPERTY_VISIBLE)) {
 			nativeView.setVisibility(TiConvert.toBoolean(newValue) ? View.VISIBLE : View.INVISIBLE);
 		} else if (key.equals(TiC.PROPERTY_ENABLED)) {
@@ -390,7 +419,11 @@ public abstract class TiUIView
 				nativeView.postInvalidate();
 			}
 		} else if (key.equals(TiC.PROPERTY_SOFT_KEYBOARD_ON_FOCUS)) {
-				Log.w(LCAT, "Focus state changed to " + TiConvert.toString(newValue) + " not honored until next focus event.");
+			Log.w(LCAT, "Focus state changed to " + TiConvert.toString(newValue) + " not honored until next focus event.");
+		} else if (key.equals(TiC.PROPERTY_TRANSFORM)) {
+			if (nativeView != null) {
+				applyTransform((Ti2DMatrix)newValue);
+			}
 		} else {
 			if (DBG) {
 				Log.d(LCAT, "Unhandled property key: " + key);
@@ -441,17 +474,18 @@ public abstract class TiUIView
 			if (focusable) {
 				registerForKeyClick(nativeView);
 			} else {
-				nativeView.setOnClickListener(null);
+				//nativeView.setOnClickListener(null); // ? mistake? I assume OnKeyListener was meant
+				nativeView.setOnKeyListener(null);
 			}
 		}
 
 		initializeBorder(d, bgColor);
 
 		if (d.containsKey(TiC.PROPERTY_TRANSFORM)) {
-			animBuilder = new TiAnimationBuilder();
-			animBuilder.applyOptions(d);
-			AnimationSet as = animBuilder.render(proxy, nativeView);
-			nativeView.startAnimation(as);
+			Ti2DMatrix matrix = (Ti2DMatrix) d.get(TiC.PROPERTY_TRANSFORM);
+			if (matrix != null) {
+				applyTransform(matrix);
+			}
 		}
 	}
 
@@ -691,6 +725,21 @@ public abstract class TiUIView
 		data.put(TiC.EVENT_PROPERTY_SOURCE, proxy);
 		return data;
 	}
+	private KrollDict dictFromEvent(KrollDict dictToCopy){
+		KrollDict data = new KrollDict();
+		if (dictToCopy.containsKey(TiC.EVENT_PROPERTY_X)){
+			data.put(TiC.EVENT_PROPERTY_X, dictToCopy.get(TiC.EVENT_PROPERTY_X));
+		} else {
+			data.put(TiC.EVENT_PROPERTY_X, (double)0);
+		}
+		if (dictToCopy.containsKey(TiC.EVENT_PROPERTY_Y)){
+			data.put(TiC.EVENT_PROPERTY_Y, dictToCopy.get(TiC.EVENT_PROPERTY_Y));
+		} else {
+			data.put(TiC.EVENT_PROPERTY_Y, (double)0);
+		}
+		data.put(TiC.EVENT_PROPERTY_SOURCE, proxy);
+		return data;
+	}
 
 	protected boolean allowRegisterForTouch()
 	{
@@ -709,6 +758,7 @@ public abstract class TiUIView
 		if (touchable == null) {
 			return;
 		}
+		mTouchView = new WeakReference<View>(touchable);
 		final GestureDetector detector = new GestureDetector(proxy.getTiContext().getActivity(),
 			new SimpleOnGestureListener() {
 				@Override
@@ -717,28 +767,44 @@ public abstract class TiUIView
 					boolean handledClick = proxy.fireEvent(TiC.EVENT_DOUBLE_CLICK, dictFromEvent(e));
 					return handledTap || handledClick;
 				}
-
 				@Override
 				public boolean onSingleTapConfirmed(MotionEvent e) {
-					Log.e(LCAT, "TAP, TAP, TAP on " + proxy);
+					if (DBG) { Log.d(LCAT, "TAP, TAP, TAP on " + proxy); }
 					boolean handledTap = proxy.fireEvent(TiC.EVENT_SINGLE_TAP, dictFromEvent(e));
-					boolean handledClick = proxy.fireEvent(TiC.EVENT_CLICK, dictFromEvent(e));
-					return handledTap || handledClick;
+					// Moved click handling to the onTouch listener, because a single tap is not the
+					// same as a click.  A single tap is a quick tap only, whereas clicks can be held
+					// before lifting.
+					// boolean handledClick = proxy.fireEvent(TiC.EVENT_CLICK, dictFromEvent(event));
+					// Note: this return value is irrelevant in our case.  We "want" to use it
+					// in onTouch below, when we call detector.onTouchEvent(event);  But, in fact,
+					// onSingleTapConfirmed is *not* called in the course of onTouchEvent.  It's
+					// called via Handler in GestureDetector. <-- See its Java source.
+					return handledTap;// || handledClick;
 				}
 			});
 
 		touchable.setOnTouchListener(new OnTouchListener() {
 			public boolean onTouch(View view, MotionEvent event) {
+				if (event.getAction() == MotionEvent.ACTION_UP) {
+					lastUpEvent.put(TiC.EVENT_PROPERTY_X, (double)event.getX());
+					lastUpEvent.put(TiC.EVENT_PROPERTY_Y, (double)event.getY());
+				}
 				boolean handled = detector.onTouchEvent(event);
 				if (!handled && motionEvents.containsKey(event.getAction())) {
 					if (event.getAction() == MotionEvent.ACTION_UP) {
-						Rect r = new Rect(view.getLeft(), view.getTop(), view.getRight(), view.getBottom());
-						boolean inRect = r.contains((int) event.getX(), (int)event.getY());
-						if (!inRect) {
-							handled = proxy.fireEvent(motionEvents.get(MotionEvent.ACTION_CANCEL), dictFromEvent(event));
-						} else {
-							handled = proxy.fireEvent(motionEvents.get(MotionEvent.ACTION_UP), dictFromEvent(event));
+						Rect r = new Rect(0, 0, view.getWidth(), view.getHeight());
+						int actualAction = r.contains((int)event.getX(), (int)event.getY())
+							? MotionEvent.ACTION_UP : MotionEvent.ACTION_CANCEL;
+						handled = proxy.fireEvent(motionEvents.get(actualAction), dictFromEvent(event));
+						if (handled && actualAction == MotionEvent.ACTION_UP) {
+							// If this listener returns true, a click event does not occur,
+							// because part of the Android View's default ACTION_UP handling
+							// is to call performClick() which leads to invoking the click
+							// listener.  If we return true, that won't run, so we're doing it
+							// here instead.
+							touchable.performClick();
 						}
+						return handled;
 					} else {
 						handled = proxy.fireEvent(motionEvents.get(event.getAction()), dictFromEvent(event));
 					}
@@ -747,8 +813,18 @@ public abstract class TiUIView
 			}
 		});
 
-	}
+		// Previously, we used the single tap handling above to fire our click event.  It doesn't
+		// work: a single tap is not the same as a click.  A click can be held for a while before
+		// lifting the finger; a single-tap is only generated from a quick tap (which will also cause
+		// a click.)  We wanted to do it in single-tap handling presumably because the singletap
+		// listener gets a MotionEvent, which gives us the information we want to provide to our
+		// users in our click event, whereas Android's standard OnClickListener does _not_ contain
+		// that info.  However, an "up" seems to always occur before the click listener gets invoked,
+		// so we store the last up event's x,y coordinates (see onTouch above) and use them here.
+		// Note: AdapterView throws an exception if you try to put a click listener on it.
+		doSetClickable(touchable);
 
+	}
 	public void setOpacity(float opacity)
 	{
 		setOpacity(nativeView, opacity);
@@ -795,5 +871,62 @@ public abstract class TiUIView
 	public KrollDict toImage()
 	{
 		return TiUIHelper.viewToImage(proxy.getTiContext(), proxy.getProperties(), getNativeView());
+	}
+	private View getTouchView()
+	{
+		if (nativeView != null) {
+			return nativeView;
+		} else {
+			if (mTouchView != null) {
+				return mTouchView.get();
+			}
+		}
+		return null;
+	}
+	private void doSetClickable(View view, boolean clickable)
+	{
+		if (view == null) {
+			return;
+		}
+		if (!clickable) {
+			view.setOnClickListener(null); // This will set clickable to true in the view, so make sure it stays here so the next line turns it off.
+			view.setClickable(false);			
+		} else if ( ! (view instanceof AdapterView) ){
+			// n.b.: AdapterView throws if click listener set.
+			// n.b.: setting onclicklistener automatically sets clickable to true.
+			view.setOnClickListener(new OnClickListener()
+			{
+				@Override
+				public void onClick(View view)
+				{
+					proxy.fireEvent(TiC.EVENT_CLICK, dictFromEvent(lastUpEvent));
+				}
+			});
+		}
+	}
+	private void doSetClickable(boolean clickable)
+	{
+		doSetClickable(getTouchView(), clickable);
+	}
+	/*
+	 * Used just to setup the click listener if applicable.
+	 */
+	private void doSetClickable(View view)
+	{
+		if (view == null) {
+			return;
+		}
+		doSetClickable(view, view.isClickable());
+	}
+	/*
+	 * Used just to setup the click listener if applicable.
+	 */
+	private void doSetClickable()
+	{
+		View view = getTouchView();
+		if (view == null) {
+			return;
+		}
+		doSetClickable(view, view.isClickable());
 	}
 }

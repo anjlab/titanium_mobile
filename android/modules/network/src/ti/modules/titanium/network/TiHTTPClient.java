@@ -21,6 +21,7 @@ import java.net.URL;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.http.Header;
@@ -41,6 +42,8 @@ import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.HttpResponseException;
 import org.apache.http.client.ResponseHandler;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.conn.params.ConnManagerParams;
+import org.apache.http.conn.params.ConnPerRouteBean;
 import org.apache.http.conn.scheme.PlainSocketFactory;
 import org.apache.http.conn.scheme.Scheme;
 import org.apache.http.conn.scheme.SchemeRegistry;
@@ -69,6 +72,7 @@ import org.appcelerator.kroll.KrollDict;
 import org.appcelerator.kroll.KrollProxy;
 import org.appcelerator.titanium.TiApplication;
 import org.appcelerator.titanium.TiBlob;
+import org.appcelerator.titanium.TiFileProxy;
 import org.appcelerator.titanium.io.TiBaseFile;
 import org.appcelerator.titanium.io.TiFile;
 import org.appcelerator.titanium.kroll.KrollCallback;
@@ -254,7 +258,9 @@ public class TiHTTPClient
 								e.printStackTrace();
 							}
 						}
-						finishedReceivingEntityData(totalSize);
+						if (totalSize > 0) {
+							finishedReceivingEntityData(totalSize);
+						}
 					}
 				}
 			}
@@ -399,23 +405,8 @@ public class TiHTTPClient
 			// filter to 512 bytes of granularity
 			if (transferred - lastTransferred >= 512) {
 				lastTransferred = transferred;
-				new Thread(new Runnable() {
-					public void run() {
-						proxy.getTiContext().getActivity().runOnUiThread(new Runnable() {
-							public void run() {
-								listener.progress(transferred);
-							}
-						});
-					}
-				}).start();
+				listener.progress(transferred);
 			}
-		}
-
-		@Override
-		public void write(byte[] b, int off, int len) throws IOException {
-			super.write(b, off, len);
-			transferred += len;
-			fireProgress();
 		}
 
 		@Override
@@ -441,6 +432,21 @@ public class TiHTTPClient
 		this.parts = new HashMap<String,ContentBody>();
 		this.maxBufferSize = proxy.getTiContext().getTiApp()
 			.getSystemProperties().getInt(PROPERTY_MAX_BUFFER_SIZE, DEFAULT_MAX_BUFFER_SIZE);
+
+		if (client == null) {
+			SchemeRegistry registry = new SchemeRegistry();
+			registry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+
+			HttpParams params = new BasicHttpParams();
+			ConnManagerParams.setMaxTotalConnections(params, 200);
+			ConnPerRouteBean connPerRoute = new ConnPerRouteBean(20);
+			ConnManagerParams.setMaxConnectionsPerRoute(params, connPerRoute);
+
+			HttpProtocolParams.setUseExpectContinue(params, false);
+			HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+
+			client = new DefaultHttpClient(new ThreadSafeClientConnManager(params, registry), params);
+		}
 	}
 
 	public int getReadyState() {
@@ -836,7 +842,6 @@ public class TiHTTPClient
 		throws MethodNotSupportedException
 	{
 		// TODO consider using task manager
-		final TiHTTPClient me = this;
 		double totalLength = 0;
 		needMultipart = false;
 		
@@ -850,17 +855,30 @@ public class TiHTTPClient
 				// first time through check if we need multipart for POST
 				for (String key : data.keySet()) {
 					Object value = data.get(key);
-					if (value instanceof TiBaseFile || value instanceof TiBlob) {
-						needMultipart = true;
-						break;
+
+					if(value != null) {
+						// if the value is a proxy, we need to get the actual file object
+						if (value instanceof TiFileProxy) {
+							value = ((TiFileProxy) value).getBaseFile();
+						}
+
+						if (value instanceof TiBaseFile || value instanceof TiBlob) {
+							needMultipart = true;
+							break;
+						}
 					}
 				}
-				
+
 				boolean queryStringAltered = false;
 				for (String key : data.keySet()) {
 					Object value = data.get(key);
 
-					if (isPostOrPut) {
+					if (isPostOrPut && (value != null)) {
+						// if the value is a proxy, we need to get the actual file object
+						if (value instanceof TiFileProxy) {
+							value = ((TiFileProxy) value).getBaseFile();
+						}
+
 						if (value instanceof TiBaseFile || value instanceof TiBlob) {
 							totalLength += addTitaniumFileAsPostData(key, value);
 						} else {
@@ -890,7 +908,7 @@ public class TiHTTPClient
 		for (String header : headers.keySet()) {
 			request.setHeader(header, headers.get(header));
 		}
-		
+
 		clientThread = new Thread(new ClientRunnable(totalLength), "TiHttpClient-" + httpClientThreadCounter.incrementAndGet());
 		clientThread.setPriority(Thread.MIN_PRIORITY);
 		clientThread.start();
@@ -918,40 +936,20 @@ public class TiHTTPClient
 				}
 				 */
 				handler = new LocalResponseHandler(TiHTTPClient.this);
-				SchemeRegistry registry = new SchemeRegistry();
-				registry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+
+				// check this with every request since technically this can be changed per request
 				SocketFactory sslFactory;
 				if (validatesSecureCertificate()) {
 					sslFactory = SSLSocketFactory.getSocketFactory();
 				} else {
 					sslFactory = new NonValidatingSSLSocketFactory();
 				}
-				registry.register(new Scheme("https", sslFactory, 443));
-				HttpParams params = new BasicHttpParams();
-				
-				if (timeout != -1) {
-					HttpConnectionParams.setConnectionTimeout(params, timeout);
-					HttpConnectionParams.setSoTimeout(params, timeout);
-				}
-				
-				
-				ThreadSafeClientConnManager manager = new ThreadSafeClientConnManager(params, registry);
-				if (client == null) {
-					client = new DefaultHttpClient(manager, params);
-				} else {
-					client.setParams(params);
-				}
-				
+				client.getConnectionManager().getSchemeRegistry().register(new Scheme("https", sslFactory, 443));
+
 				if (credentials != null) {
-					client.getCredentialsProvider().setCredentials (
-						new AuthScope(uri.getHost(), -1),
-						credentials
-					);
-					
+					client.getCredentialsProvider().setCredentials (new AuthScope(uri.getHost(), -1), credentials);
 					credentials = null;
 				}
-				HttpProtocolParams.setUseExpectContinue(client.getParams(), false);
-				HttpProtocolParams.setVersion(client.getParams(), HttpVersion.HTTP_1_1);
 				client.setRedirectHandler(new RedirectHandler());
 				if(request instanceof BasicHttpEntityEnclosingRequest) {
 
@@ -966,7 +964,7 @@ public class TiHTTPClient
 						}
 					}
 
-					if(parts.size() > 0 && needMultipart) {
+					if (parts.size() > 0 && needMultipart) {
 						mpe = new MultipartEntity();
 						for(String name : parts.keySet()) {
 							Log.d(LCAT, "adding part " + name + ", part type: " + parts.get(name).getMimeType() + ", len: " + parts.get(name).getContentLength());
@@ -987,25 +985,31 @@ public class TiHTTPClient
 						HttpEntityEnclosingRequest e = (HttpEntityEnclosingRequest) request;
 						Log.d(LCAT, "totalLength="+totalLength);
 
-						/*ProgressEntity progressEntity = new ProgressEntity(mpe, new ProgressListener() {
+						ProgressEntity progressEntity = new ProgressEntity(mpe, new ProgressListener() {
 							public void progress(int progress) {
 								KrollCallback cb = getCallback(ON_SEND_STREAM);
 								if (cb != null) {
 									KrollDict data = new KrollDict();
-									data.put("progress", ((double)progress)/fTotalLength);
+									data.put("progress", ((double)progress)/totalLength);
 									data.put("source", proxy);
-									cb.callWithProperties(data);
+									cb.callAsync(data);
 								}
 							}
-						});*/
-						//e.setEntity(progressEntity);
+						});
+						e.setEntity(progressEntity);
 
-						e.setEntity(mpe);
 						e.addHeader("Length", totalLength+"");
 					} else {
 						handleURLEncodedData(form);
 					}
 				}
+
+				// set request specific parameters
+				if (timeout != -1) {
+					HttpConnectionParams.setConnectionTimeout(request.getParams(), timeout);
+					HttpConnectionParams.setSoTimeout(request.getParams(), timeout);
+				}
+
 				if (DBG) {
 					Log.d(LCAT, "Preparing to execute request");
 				}
@@ -1017,6 +1021,10 @@ public class TiHTTPClient
 				setResponseText(result);
 				setReadyState(READY_STATE_DONE);
 			} catch(Throwable t) {
+				Log.d(LCAT, "clearing the expired and idle connections");
+				client.getConnectionManager().closeExpiredConnections();
+				client.getConnectionManager().closeIdleConnections(0, TimeUnit.NANOSECONDS);
+
 				String msg = t.getMessage();
 				if (msg == null && t.getCause() != null) {
 					msg = t.getCause().getMessage();

@@ -507,6 +507,10 @@ public class TiUIHelper
 				}
 			}
 			view.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY));
+			if (view.getParent() == null) {
+				Log.i(LCAT, "view does not have parent, calling layout");
+				view.layout(0, 0, width, height);
+			}
 
 			// now that we have forced the view to layout itself, grab dimensions
 			width = view.getMeasuredWidth();
@@ -743,8 +747,20 @@ public class TiUIHelper
 			}
 		}
 	}
-	
-	public static int convertToAndroidOrientation(int orientation) {
+
+	public static int convertConfigToActivityOrientation(int orientation)
+	{
+		switch(orientation) {
+			case Configuration.ORIENTATION_PORTRAIT:
+				return ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+			case Configuration.ORIENTATION_LANDSCAPE:
+				return ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+			default:
+				return -1;
+		}
+	}
+
+	public static int convertTiToActivityOrientation(int orientation) {
 		switch (orientation) {
 			case LANDSCAPE_LEFT :
 			case LANDSCAPE_RIGHT :

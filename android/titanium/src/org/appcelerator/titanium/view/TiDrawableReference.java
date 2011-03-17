@@ -12,6 +12,9 @@ import java.io.InputStream;
 import java.lang.ref.SoftReference;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.appcelerator.kroll.KrollDict;
 import org.appcelerator.titanium.TiBlob;
@@ -19,19 +22,28 @@ import org.appcelerator.titanium.TiContext;
 import org.appcelerator.titanium.TiDimension;
 import org.appcelerator.titanium.io.TiBaseFile;
 import org.appcelerator.titanium.util.Log;
+import org.appcelerator.titanium.util.TiBackgroundImageLoadTask;
 import org.appcelerator.titanium.util.TiConvert;
 import org.appcelerator.titanium.util.TiDownloadListener;
 import org.appcelerator.titanium.util.TiDownloadManager;
 import org.appcelerator.titanium.util.TiFileHelper;
 import org.appcelerator.titanium.util.TiUIHelper;
 
+import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.webkit.URLUtil;
 
 public class TiDrawableReference
 {
+	private static Map<Integer, Bounds> boundsCache;
+	static {
+		boundsCache = Collections.synchronizedMap(new HashMap<Integer, Bounds>());
+	}
 	
 	public enum DrawableReferenceType {
 		NULL, URL, RESOURCE_ID, BLOB, FILE
@@ -54,7 +66,6 @@ public class TiDrawableReference
 	private TiBaseFile file;
 	private DrawableReferenceType type;
 	private boolean oomOccurred = false;
-	private boolean downloadAsync = false;
 	
 	private SoftReference<TiContext> softContext = null;
 	
@@ -65,7 +76,32 @@ public class TiDrawableReference
 		this.type = type;
 		softContext = new SoftReference<TiContext>(context);
 	}
-	
+
+	/**
+	 * A very primitive implementation based on org.apache.commons.lang3.builder.HashCodeBuilder,
+	 * which is licensed under Apache 2.0 license.
+	 * @see <a href="http://svn.apache.org/viewvc/commons/proper/lang/trunk/src/main/java/org/apache/commons/lang3/builder/HashCodeBuilder.java?view=markup">HashCodeBuilder</a>
+	 */
+	@Override
+	public int hashCode()
+	{
+		int total = 17;
+		final int constant = 37;
+		total = total * constant + type.ordinal();
+		total = total * constant + (url == null ? 0 : url.hashCode());
+		total = total * constant + (blob == null ? 0 : blob.hashCode());
+		total = total * constant + (file == null ? 0 : file.hashCode());
+		total = total * constant + resourceId;
+		return total;
+	}
+	@Override
+	public boolean equals(Object object)
+	{
+		if (!(object instanceof TiDrawableReference)) {
+			return super.equals(object);
+		}
+		return (this.hashCode() == ((TiDrawableReference)object).hashCode());
+	}
 	public static TiDrawableReference fromResourceId(TiContext context, int resourceId) 
 	{
 		TiDrawableReference ref = new TiDrawableReference(context, DrawableReferenceType.RESOURCE_ID);
@@ -113,7 +149,6 @@ public class TiDrawableReference
 			return fromObject(context, null);
 		}
 	}
-	
 	/**
 	 * Does its best to determine the type of reference (url, blob, etc) based on object parameter.
 	 * @param context
@@ -137,7 +172,7 @@ public class TiDrawableReference
 		} else if (object instanceof Number) {
 			return fromResourceId(context, ((Number)object).intValue());
 		} else {
-			Log.w(LCAT, "Unknown image reesource type: " + object.getClass().getSimpleName() + ". Returning null drawable reference");
+			Log.w(LCAT, "Unknown image resource type: " + object.getClass().getSimpleName() + ". Returning null drawable reference");
 			return fromObject(context, null);
 		}
 	}
@@ -162,7 +197,6 @@ public class TiDrawableReference
 	public boolean isTypeResourceId() {
 		return type == DrawableReferenceType.RESOURCE_ID;
 	}
-	
 	public boolean isTypeNull() {
 		return type == DrawableReferenceType.NULL;
 	}
@@ -203,8 +237,78 @@ public class TiDrawableReference
 		}
 		return b;
 	}
-	
-	
+	private Resources getResources()
+	{
+		TiContext tiContext = softContext.get();
+		if (tiContext != null) {
+			Context context = tiContext.getAndroidContext();
+			if (context != null) {
+				return context.getResources();
+			}
+		}
+		return null;
+	}
+	private Drawable getResourceDrawable()
+	{
+		if (!isTypeResourceId()) {
+			return null;
+		}
+		Drawable drawable = null;
+		Resources resources = getResources();
+		if (resources != null && resourceId > 0) {
+			try {
+				drawable = resources.getDrawable(resourceId);
+			} catch (Resources.NotFoundException e) {
+				drawable = null;
+			}
+		}
+		return drawable;
+	}
+	/**
+	 * Gets a resource drawable directly if the reference is to a resource, else
+	 * makes a BitmapDrawable with the given attributes.
+	 */
+	public Drawable getDrawable(View parent, TiDimension destWidthDimension, TiDimension destHeightDimension)
+	{
+		Drawable drawable = getResourceDrawable();
+		if (drawable == null) {
+			Bitmap b = getBitmap(parent, destWidthDimension, destHeightDimension);
+			if (b != null) {
+				drawable = new BitmapDrawable(b);
+			}
+		}
+		return drawable;
+	}
+	/**
+	 * Gets a resource drawable directly if the reference is to a resource, else
+	 * makes a BitmapDrawable with the given attributes.
+	 */
+	public Drawable getDrawable(int destWidth, int destHeight)
+	{
+		Drawable drawable = getResourceDrawable();
+		if (drawable == null) {
+			Bitmap b = getBitmap(destWidth, destHeight);
+			if (b != null) {
+				drawable = new BitmapDrawable(b);
+			}
+		}
+		return drawable;
+	}
+	/**
+	 * Gets a resource drawable directly if the reference is to a resource, else
+	 * makes a BitmapDrawable with default attributes.
+	 */
+	public Drawable getDrawable()
+	{
+		Drawable drawable = getResourceDrawable();
+		if (drawable == null) {
+			Bitmap b = getBitmap();
+			if (b != null) {
+				drawable = new BitmapDrawable(b);
+			}
+		}
+		return drawable;
+	}
 	/**
 	 * Gets the bitmap, scaled to a specific width & height.
 	 * @param destWidth Width in pixels of resulting scaled bitmap
@@ -253,7 +357,12 @@ public class TiDrawableReference
 				destWidth = srcWidth; // default, but try harder below
 				TiContext context = softContext.get();
 				if (context != null && context.getActivity() != null && context.getActivity().getWindow() != null) {
-					destWidth = context.getActivity().getWindow().getDecorView().getWidth();
+					int parentWidth = context.getActivity().getWindow().getDecorView().getWidth();
+					if (parentWidth > 0) {
+						// the parent may not be finished laying out yet
+						// we'll take the natural width as the best guess in that case
+						destWidth = parentWidth;
+					}
 				}
 			} else {
 				destWidth = destWidthDimension.isUnitAuto() ? srcWidth : destWidthDimension.getAsPixels(parent);
@@ -299,8 +408,7 @@ public class TiDrawableReference
 	}
 
 	/**
-	 * Just runs .load(url) on the passed TiBackgroundImageLoadTask.
-	 * @param asyncTask
+	 * Just runs TiDownloadManager.download(URI, listener) giving it the passed listener.
 	 */
 	public void getBitmapAsync(TiDownloadListener listener)
 	{
@@ -314,8 +422,17 @@ public class TiDrawableReference
 			Log.e(LCAT, "URI Invalid: " + url, e);
 		}
 	}
-	
-	
+	/**
+	 * Just runs .load(url) on the passed TiBackgroundImageLoadTask.
+	 * @param asyncTask
+	 */
+	public void getBitmapAsync(TiBackgroundImageLoadTask asyncTask)
+	{
+		if (!isNetworkUrl()) {
+			Log.w(LCAT, "getBitmapAsync called on non-network url.  Will attempt load.");
+		}
+		asyncTask.load(url);
+	}
 	/**
 	 * Uses BitmapFactory.Options' 'inJustDecodeBounds' to peak at the bitmap's bounds
 	 * (height & width) so we can do some sampling and scaling.
@@ -323,7 +440,10 @@ public class TiDrawableReference
 	 */
 	public Bounds peakBounds()
 	{
-		
+		int hash = this.hashCode();
+		if (boundsCache.containsKey(hash)) {
+			return boundsCache.get(hash);
+		}
 		Bounds bounds = new Bounds();
 		if (isTypeNull()) { return bounds; }
 		
@@ -348,7 +468,7 @@ public class TiDrawableReference
 				Log.e(LCAT, "problem closing stream: " + e.getMessage(), e);
 			}
 		}
-		
+		boundsCache.put(hash, bounds);
 		return bounds;
 	}
 	
@@ -389,7 +509,7 @@ public class TiDrawableReference
 		} else if (isTypeResourceId() && resourceId != UNKNOWN && context != null) {
 			stream = context.getTiApp().getResources().openRawResource(resourceId);
 		}
-		
+
 		return stream;
 	}
 	

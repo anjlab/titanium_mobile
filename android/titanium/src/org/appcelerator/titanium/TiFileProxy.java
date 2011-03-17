@@ -1,0 +1,35 @@
+/**
+ * Appcelerator Titanium Mobile
+ * Copyright (c) 2010 by Appcelerator, Inc. All Rights Reserved.
+ * Licensed under the terms of the Apache Public License
+ * Please see the LICENSE included with this distribution for details.
+ */
+package org.appcelerator.titanium;
+
+import java.io.IOException;
+import java.io.InputStream;
+
+import org.appcelerator.kroll.KrollProxy;
+import org.appcelerator.kroll.annotations.Kroll;
+import org.appcelerator.titanium.io.TiBaseFile;
+
+@Kroll.proxy
+public abstract class TiFileProxy extends KrollProxy
+{
+	public TiFileProxy(TiContext tiContext)
+	{
+		super(tiContext);
+	}
+	
+	public abstract TiBaseFile getBaseFile();
+
+	public InputStream getInputStream() throws IOException
+	{
+		return getBaseFile().getInputStream();
+	}
+
+	public String toString()
+	{
+		return "[object TiFileProxy]";
+	}
+}

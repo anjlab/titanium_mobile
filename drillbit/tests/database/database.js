@@ -71,6 +71,7 @@ describe("Ti.Database tests", {
 		
 			rs = db.execute("select * from Test");
 			valueOf(rs).shouldNotBeNull();
+			valueOf(rs.isValidRow()).shouldBe(true);
 			valueOf(rs.getFieldCount()).shouldBe(1);
 			valueOf(rs.rowCount).shouldBe(1);
 			valueOf(rs.getField(0)).shouldBe("My TestRow");
@@ -82,5 +83,116 @@ describe("Ti.Database tests", {
 		
 		var f = Ti.Filesystem.getFile("file:///data/data/org.appcelerator.titanium.testharness/databases/Test");
 		valueOf(f.exists()).shouldBeFalse();
+	},
+	testDatabaseCount : function() {
+		var testRowCount = 1500;
+		var db = Ti.Database.open('Test');
+		try {
+			valueOf(db).shouldNotBeNull();
+			
+			var rs = db.execute("drop table if exists data");
+			valueOf(rs).shouldBeNull();
+			
+			db.execute('CREATE TABLE IF NOT EXISTS data (id INTEGER PRIMARY KEY, val TEXT)');
+			for (var i = 1; i <= testRowCount; i++) {
+			    db.execute('INSERT INTO data (val) VALUES(?)','our value:' + i);
+			}
+
+		    rs = db.execute("SELECT * FROM data");
+		    var rowCount = rs.rowCount;
+		    var realCount = 0;
+		    while (rs.isValidRow()) {
+		        realCount += 1;
+		        rs.next();
+		    }
+
+		    valueOf(realCount).shouldBe(testRowCount);
+		    valueOf(rowCount).shouldBe(testRowCount);
+		    valueOf(rowCount).shouldBe(realCount);
+		} finally {
+			db.close();
+			db.remove();
+		}
+	},
+	testDatabaseRollback : function () {
+		var db = Ti.Database.open('Test');
+		var testRowCount = 30;
+		try {
+			valueOf(db).shouldNotBeNull();
+			
+			var rs = db.execute("drop table if exists data");
+			valueOf(rs).shouldBeNull();
+			
+			db.execute('BEGIN DEFERRED TRANSACTION');
+			db.execute('CREATE TABLE IF NOT EXISTS data (id INTEGER PRIMARY KEY, val TEXT)');
+			db.execute('SAVEPOINT FOO');
+			for (var i = 1; i <= testRowCount; i++) {
+			    db.execute('INSERT INTO data (val) VALUES(?)','our value:' + i);
+			}
+			db.execute('ROLLBACK TRANSACTION TO SAVEPOINT FOO');
+			db.execute('COMMIT TRANSACTION');
+			
+			rs = db.execute("SELECT * FROM data");
+			valueOf(rs.rowCount).shouldBe(0);
+			
+			db.execute('BEGIN TRANSACTION');
+			db.execute('drop table if exists data');
+			db.execute('ROLLBACK TRANSACTION');
+			
+			rs = db.execute("SELECT * FROM data");
+			valueOf(rs).shouldNotBeNull();
+			
+		} finally {
+			db.close();
+			db.remove();
+		}
+	},
+	// https://appcelerator.lighthouseapp.com/projects/32238-titanium-mobile/tickets/2917-api-doc-dbexecute
+	testDatabaseLH2917: function() {
+		var db = Titanium.Database.open('Test'),
+		    rowCount = 10,
+				resultSet, i, counter;
+
+		
+		valueOf(db).shouldBeObject();
+		valueOf(resultSet).shouldBeUndefined();
+		valueOf(i).shouldBeUndefined();
+		valueOf(counter).shouldBeUndefined();
+
+		try {
+			db.execute('CREATE TABLE IF NOT EXISTS stuff (id INTEGER, val TEXT)');
+			db.execute('DELETE FROM stuff'); //clear table of all existing data
+
+		  //test that the execute method works with and without an array as the second argument
+
+			for(i = 1; i <= rowCount / 2; ++id) {
+				 db.execute('INSERT INTO stuff (id, val) VALUES(?, ?)', i, 'our value' + i);
+			}
+
+			while(i <= rowCount) {
+				 db.execute('INSERT INTO stuff (id, val) VALUES(?, ?)', [i, 'our value' + i]);
+				 ++i;
+			}
+
+			resultSet = db.execute('SELECT * FROM stuff');
+			
+			valueOf(resultSet).shouldNotBeNull();
+			valueOf(resultSet).shouldBeObject();
+			valueOf(resultSet.rowCount).shouldBe(rowCount);
+
+			counter = 1;
+			while(resultSet.isValidRow()) {
+				valueOf(resultSet.fieldByName('id')).shouldBe(counter);
+			  valueOf(resultSet.fieldByName('val')).shouldBe('our value' + counter);
+			  ++counter;
+
+				resultSet.next();
+			}
+		} catch(e) {
+			Titanium.API.debug('error occurred: ' + e);
+		} finally {
+			db.close();
+			db.remove();
+	 	}
 	}
 });

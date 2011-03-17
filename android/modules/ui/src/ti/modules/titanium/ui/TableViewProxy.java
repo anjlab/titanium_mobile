@@ -39,18 +39,8 @@ public class TableViewProxy extends TiViewProxy
 	private static final int MSG_DELETE_ROW = TiViewProxy.MSG_LAST_ID + 5004;
 	private static final int MSG_INSERT_ROW = TiViewProxy.MSG_LAST_ID + 5005;
 	private static final int MSG_APPEND_ROW = TiViewProxy.MSG_LAST_ID + 5006;
+	private static final int MSG_SCROLL_TO_TOP = TiViewProxy.MSG_LAST_ID + 5007;
 
-	public static final String PROPERTY_DATA = "data";
-	public static final String PROPERTY_SEARCH = "search";
-	public static final String PROPERTY_FILTER_ATTRIBUTE = "filterAttribute";
-	public static final String PROPERTY_FILTER_CASE_INSENSITIVE = "filterCaseInsensitive";
-	public static final String PROPERTY_SEPARATOR_COLOR = "separatorColor";
-	public static final String PROPERTY_HEADER_VIEW = "headerView";
-	public static final String PROPERTY_FOOTER_VIEW = "footerView";
-	
-	public static final String EVENT_PROPERTY_LAYOUT_NAME = "layoutName";
-	public static final String EVENT_PROPERTY_SEARCH_MODE = "searchMode";
-	
 	public static final String CLASSNAME_DEFAULT = "__default__";
 	public static final String CLASSNAME_HEADER = "__header__";
 	public static final String CLASSNAME_NORMAL = "__normal__";
@@ -72,14 +62,18 @@ public class TableViewProxy extends TiViewProxy
 	
 	@Override
 	public void handleCreationDict(KrollDict dict) {
-		if (dict.containsKey(PROPERTY_DATA)) {
-			Object o = dict.get(PROPERTY_DATA);
+		Object data[] = null;
+		if (dict.containsKey(TiC.PROPERTY_DATA)) {
+			Object o = dict.get(TiC.PROPERTY_DATA);
 			if (o != null && o instanceof Object[]) {
-				processData((Object[]) o);
-				dict.remove(PROPERTY_DATA); // don't override our data accessor
+				data = (Object[]) o;
+				dict.remove(TiC.PROPERTY_DATA); // don't override our data accessor
 			}
 		}
 		super.handleCreationDict(dict);
+		if (data != null) {
+			processData(data);
+		}
 	}
 
 	@Override
@@ -147,10 +141,7 @@ public class TableViewProxy extends TiViewProxy
 			return;
 		}
 
-		AsyncResult result = new AsyncResult(row);
-		Message msg = getUIHandler().obtainMessage(MSG_APPEND_ROW, result);
-		msg.sendToTarget();
-		result.getResult();
+		sendBlockingUiMessage(MSG_APPEND_ROW, row);
 	}
 
 	private void handleAppendRow(Object row) {
@@ -161,9 +152,12 @@ public class TableViewProxy extends TiViewProxy
 			processData(data);
 		} else {
 			TableViewSectionProxy lastSection = sections.get(sections.size() - 1);
-			rowProxy.setProperty(TiC.PROPERTY_SECTION, lastSection);
-			rowProxy.setProperty(TiC.PROPERTY_PARENT, lastSection);
-			lastSection.insertRowAt((int) lastSection.getRowCount(), rowProxy);
+			TableViewSectionProxy addedToSection = addRowToSection(rowProxy, lastSection);
+			if (lastSection == null || !lastSection.equals(addedToSection)) {
+				sections.add(addedToSection);
+			}
+			rowProxy.setProperty(TiC.PROPERTY_SECTION, addedToSection);
+			rowProxy.setProperty(TiC.PROPERTY_PARENT, addedToSection);
 		}
 		getTableView().setModelDirty();
 		updateView();
@@ -231,12 +225,8 @@ public class TableViewProxy extends TiViewProxy
 			handleInsertRowBefore(index, data);
 			return;
 		}
-		AsyncResult result = new AsyncResult(data);
-		Message msg = getUIHandler().obtainMessage(MSG_INSERT_ROW, result);
-		msg.arg1 = INSERT_ROW_BEFORE;
-		msg.arg2 = index;
-		msg.sendToTarget();
-		result.getResult();
+
+		sendBlockingUiMessage(MSG_INSERT_ROW, data, INSERT_ROW_BEFORE, index);
 	}
 	
 	private void handleInsertRowBefore(int index, Object data) {
@@ -273,12 +263,7 @@ public class TableViewProxy extends TiViewProxy
 			handleInsertRowAfter(index, data);
 			return;
 		}
-		AsyncResult result = new AsyncResult(data);
-		Message msg = getUIHandler().obtainMessage(MSG_INSERT_ROW, result);
-		msg.arg1 = INSERT_ROW_AFTER;
-		msg.arg2 = index;
-		msg.sendToTarget();
-		result.getResult();
+		sendBlockingUiMessage(MSG_INSERT_ROW, data, INSERT_ROW_AFTER, index);
 	}
 	
 	private void handleInsertRowAfter(int index, Object data) {
@@ -305,52 +290,59 @@ public class TableViewProxy extends TiViewProxy
 		}
 		return sections;
 	}
-	
-	public void processData(Object[] data) {
+
+	/**
+	 * If the row does not carry section information, it will be added
+	 * to the currentSection.  If it does carry section information (i.e., a header), 
+	 * that section will be created and the row added to it.  Either way,
+	 * whichever section the row gets added to will be returned.
+	 */
+	private TableViewSectionProxy addRowToSection(TableViewRowProxy row, TableViewSectionProxy currentSection)
+	{
+		KrollDict d = row.getProperties();
+		TableViewSectionProxy addedToSection = null;
+		if (currentSection == null || d.containsKey(TiC.PROPERTY_HEADER)) {
+			addedToSection = new TableViewSectionProxy(getTiContext());
+		} else {
+			addedToSection = currentSection;
+		}
+		if (d.containsKey(TiC.PROPERTY_HEADER)) {
+			addedToSection.setProperty(TiC.PROPERTY_HEADER_TITLE, d.get(TiC.PROPERTY_HEADER));
+		}
+		if (d.containsKey(TiC.PROPERTY_FOOTER)) {
+			addedToSection.setProperty(TiC.PROPERTY_FOOTER_TITLE, d.get(TiC.PROPERTY_FOOTER));
+		}
+		addedToSection.add(row);
+		return addedToSection;
+	}
+	public void processData(Object[] data)
+	{
 		ArrayList<TableViewSectionProxy> sections = getSections();
 		sections.clear();
 
 		TableViewSectionProxy currentSection = null;
+		if (hasProperty(TiC.PROPERTY_HEADER_TITLE)) {
+			currentSection = new TableViewSectionProxy(context);
+			sections.add(currentSection);
+			currentSection.setProperty(TiC.PROPERTY_HEADER_TITLE, getProperty(TiC.PROPERTY_HEADER_TITLE));
+		}
+		if (hasProperty(TiC.PROPERTY_FOOTER_TITLE)) {
+			if (currentSection == null) {
+				currentSection = new TableViewSectionProxy(context);
+				sections.add(currentSection);
+			}
+			currentSection.setProperty(TiC.PROPERTY_FOOTER_TITLE, getProperty(TiC.PROPERTY_FOOTER_TITLE));
+		}
 
 		for (int i = 0; i < data.length; i++) {
 			Object o = data[i];
-
-			if (o instanceof KrollDict) {
-				KrollDict d = (KrollDict) o;
-				TableViewRowProxy rowProxy = new TableViewRowProxy(getTiContext());
-				rowProxy.handleCreationDict(d);
-				rowProxy.setProperty(TiC.PROPERTY_CLASS_NAME, CLASSNAME_NORMAL);
-				rowProxy.setProperty(TiC.PROPERTY_ROW_DATA, data);
-				rowProxy.setParent(this);
-
-				if (currentSection == null || d.containsKey(TiC.PROPERTY_HEADER)) {
-					currentSection = new TableViewSectionProxy(getTiContext());
+			if (o instanceof KrollDict || o instanceof TableViewRowProxy) {
+				TableViewRowProxy rowProxy = rowProxyFor(o);
+				TableViewSectionProxy addedToSection = addRowToSection(rowProxy, currentSection);
+				if (currentSection == null || !currentSection.equals(addedToSection)) {
+					currentSection = addedToSection;
 					sections.add(currentSection);
 				}
-				if (d.containsKey(TiC.PROPERTY_HEADER)) {
-					currentSection.setProperty(TiC.PROPERTY_HEADER_TITLE, d.get(TiC.PROPERTY_HEADER));
-				}
-				if (d.containsKey(TiC.PROPERTY_FOOTER)) {
-					currentSection.setProperty(TiC.PROPERTY_FOOTER_TITLE, d.get(TiC.PROPERTY_FOOTER));
-				}
-				currentSection.add(rowProxy);
-			} else if (o instanceof TableViewRowProxy) {
-				TableViewRowProxy rowProxy = (TableViewRowProxy) o;
-				KrollDict d = rowProxy.getProperties();
-				rowProxy.setParent(this);
-
-				if (currentSection == null || d.containsKey(TiC.PROPERTY_HEADER)) {
-					currentSection = new TableViewSectionProxy(getTiContext());
-					sections.add(currentSection);
-				}
-				if (d.containsKey(TiC.PROPERTY_HEADER)) {
-					currentSection.setProperty(TiC.PROPERTY_HEADER_TITLE, d.get(TiC.PROPERTY_HEADER));
-				}
-				if (d.containsKey(TiC.PROPERTY_FOOTER)) {
-					currentSection.setProperty(TiC.PROPERTY_FOOTER_TITLE, d.get(TiC.PROPERTY_FOOTER));
-				}
-
-				currentSection.add((TableViewRowProxy) o);
 			} else if (o instanceof TableViewSectionProxy) {
 				currentSection = (TableViewSectionProxy) o;
 				sections.add(currentSection);
@@ -373,10 +365,7 @@ public class TableViewProxy extends TiViewProxy
 		if (ctx.isUIThread()) {
 			handleSetData(actualData);
 		} else {
-			AsyncResult result = new AsyncResult(actualData);
-			Message msg = getUIHandler().obtainMessage(MSG_SET_DATA, result);
-			msg.sendToTarget();
-			result.getResult();
+			sendBlockingUiMessage(MSG_SET_DATA, actualData);
 		}
 	}
 	
@@ -443,16 +432,19 @@ public class TableViewProxy extends TiViewProxy
 			getTableView().updateView();
 			return;
 		}
-		AsyncResult result = new AsyncResult();
-		Message msg = getUIHandler().obtainMessage(MSG_UPDATE_VIEW);
-		msg.obj = result;
-		msg.sendToTarget();
-		result.getResult();
+		sendBlockingUiMessage(MSG_UPDATE_VIEW, null);
 	}
 
 	@Kroll.method
 	public void scrollToIndex(int index) {
 		Message msg = getUIHandler().obtainMessage(MSG_SCROLL_TO_INDEX);
+		msg.arg1 = index;
+		msg.sendToTarget();
+	}
+
+	@Kroll.method
+	public void scrollToTop(int index) {
+		Message msg = getUIHandler().obtainMessage(MSG_SCROLL_TO_TOP);
 		msg.arg1 = index;
 		msg.sendToTarget();
 	}
@@ -489,11 +481,13 @@ public class TableViewProxy extends TiViewProxy
 		} else if (msg.what == MSG_DELETE_ROW) {
 			handleDeleteRow(msg.arg1);
 			return true;
+		} else if (msg.what == MSG_SCROLL_TO_TOP) {
+			getTableView().scrollToTop(msg.arg1);
+			return true;
 		}
 
 		return super.handleMessage(msg);
 	}
-	
 
 	// labels only send out click events when they are explicitly told to do so.
 	// we need to tell each label child to enable clicks when a click listener is added

@@ -16,11 +16,12 @@
 /**
  * MODIFICATIONS:
  * Appcelerator Titanium Mobile
- * Copyright (c) 2009-2010 by Appcelerator, Inc. All Rights Reserved.
+ * Copyright (c) 2009-2011 by Appcelerator, Inc. All Rights Reserved.
  * Licensed under the terms of the Apache Public License
  * Please see the LICENSE included with this distribution for details.
  */
 package kankan.wheel.widget;
+
 
 
 /**
@@ -33,16 +34,20 @@ public class NumericWheelAdapter implements WheelAdapter {
 
 	/** The default max value */
 	private static final int DEFAULT_MIN_VALUE = 0;
+
+	/** The default max value */
+	private static final int DEFAULT_STEP_VALUE = 1;
 	
 	// Values
 	private int minValue;
 	private int maxValue;
+	private int stepValue;
 	
 	/**
 	 * Default constructor
 	 */
 	public NumericWheelAdapter() {
-		this(DEFAULT_MIN_VALUE, DEFAULT_MAX_VALUE);
+		this(DEFAULT_MIN_VALUE, DEFAULT_MAX_VALUE, DEFAULT_STEP_VALUE);
 	}
 
 	/**
@@ -51,22 +56,35 @@ public class NumericWheelAdapter implements WheelAdapter {
 	 * @param maxValue the wheel maz value
 	 */
 	public NumericWheelAdapter(int minValue, int maxValue) {
-		this.minValue = minValue;
-		this.maxValue = maxValue;
+		this(minValue, maxValue, DEFAULT_STEP_VALUE);
 	}
 
-
+	/**
+	 * Constructor
+	 * @param minValue the wheel min value
+	 * @param maxValue the wheel maz value
+	 * @param stepValue the numeric step value
+	 */
+	public NumericWheelAdapter(int minValue, int maxValue, int stepValue) {
+		this.minValue = minValue;
+		this.maxValue = maxValue;
+		this.stepValue = stepValue;
+	}
+	
+	
 	@Override
 	public String getItem(int index) {
 		if (index >= 0 && index < getItemsCount()) {
-			return Integer.toString(minValue + index);
+			int actualValue = minValue + index * stepValue;
+			return Integer.toString(actualValue);
 		}
 		return null;
 	}
 
 	@Override
 	public int getItemsCount() {
-		return maxValue - minValue + 1;
+		int itemCount = ( (maxValue - minValue) / stepValue) + 1;
+		return itemCount;
 	}
 	
 	@Override
@@ -88,10 +106,18 @@ public class NumericWheelAdapter implements WheelAdapter {
 	}
 	
 	public int getValue(int index) {
-		return minValue + index;
+		int tmpValue = (minValue + index * stepValue);
+		if (tmpValue > maxValue)
+			return maxValue;
+		else
+			return tmpValue;	
 	}
 	
 	public int getIndex(int value) {
-		return value - minValue;
+		return (value - minValue) / stepValue;
+	}
+	public void setStepValue(int value)
+	{
+		this.stepValue = value;
 	}
 }

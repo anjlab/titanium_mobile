@@ -28,32 +28,41 @@ public class IntentProxy extends KrollProxy
 {
 	private static final String TAG = "TiIntent";
 	private static boolean DBG = TiConfig.LOGD;
-	
+
+	public static final int TYPE_ACTIVITY = 0;
+	public static final int TYPE_SERVICE = 1;
+	public static final int TYPE_BROADCAST = 2;
+
 	protected Intent intent;
-	protected boolean forService = false;
-	
-	public IntentProxy(TiContext tiContext) {
+	protected int type = TYPE_ACTIVITY;
+
+	public IntentProxy(TiContext tiContext)
+	{
 		super(tiContext);
 	}
-	
-	public IntentProxy(TiContext tiContext, Intent intent) {
+
+	public IntentProxy(TiContext tiContext, Intent intent)
+	{
 		super(tiContext);
 		this.intent = intent;
 	}
-	
+
 	protected static char[] escapeChars = new char[] {
 		'\\', '/', ' ', '.', '$', '&', '@'
 	};
-	
-	protected static String getActivityURLClassName(String url) {
-		return getURLClassName(url, "Activity");
+
+	protected static String getURLClassName(String url, int type)
+	{
+		switch (type) {
+			case TYPE_ACTIVITY: return getURLClassName(url, "Activity");
+			case TYPE_SERVICE: return getURLClassName(url, "Service");
+			case TYPE_BROADCAST: return getURLClassName(url, "Broadcast");
+		}
+		return null;
 	}
-	
-	protected static String getServiceURLClassName(String url) {
-		return getURLClassName(url, "Service");
-	}
-	
-	protected static String getURLClassName(String url, String appendage) {
+
+	protected static String getURLClassName(String url, String appendage)
+	{
 		List<String> parts = Arrays.asList(url.split("/"));
 		if (parts.size() == 0) return null;
 		
@@ -79,8 +88,9 @@ public class IntentProxy extends KrollProxy
 		
 		return className+appendage;
 	}
-	
-	public void handleCreationDict(KrollDict dict) {
+
+	public void handleCreationDict(KrollDict dict)
+	{
 		intent = new Intent();
 		
 		// See which set of options we have to work with.
@@ -90,6 +100,17 @@ public class IntentProxy extends KrollProxy
 		String className = dict.getString(TiC.PROPERTY_CLASS_NAME);
 		String packageName = dict.getString(TiC.PROPERTY_PACKAGE_NAME);
 		String type = dict.getString(TiC.PROPERTY_TYPE);
+		int flags = 0;
+
+		if (dict.containsKey(TiC.PROPERTY_FLAGS)) {
+			flags = TiConvert.toInt(dict, TiC.PROPERTY_FLAGS);
+			if (DBG) {
+				Log.d(TAG, "Setting flags: " + Integer.toString(flags));
+			}
+			intent.setFlags(flags);
+		} else {
+			setProperty("flags", intent.getFlags(), false);
+		}
 
 		if (action != null) {
 			if (DBG) {
@@ -97,29 +118,22 @@ public class IntentProxy extends KrollProxy
 			}
 			intent.setAction(action);
 		}
-		
-		if (data != null) {
-			if (DBG) {
-				Log.d(TAG, "Setting data uri: " + data);
-			}
-			intent.setData(Uri.parse(data));
-		}
-		
+
 		if (packageName != null) {
 			if (DBG) {
 				Log.d(TAG, "Setting package: " + packageName);
 			}
 			intent.setPackage(packageName);
 		}
-		
+
 		if (url != null) {
 			if (DBG) {
 				Log.d(TAG, "Creating intent for JS Activity/Service @ " + url);
 			}
 			packageName = TiApplication.getInstance().getPackageName();
-			className = packageName + "." + (forService ? getServiceURLClassName(url) : getActivityURLClassName(url));
+			className = packageName + "." + getURLClassName(url, this.type);
 		}
-		
+
 		if (className != null) {
 			if (packageName != null) {
 				if (DBG) {
@@ -136,24 +150,35 @@ public class IntentProxy extends KrollProxy
 				}
 			}
 		}
-		
+
+
+		if (type == null) {
+			if (action != null && action.equals(Intent.ACTION_SEND)) {
+				type = "text/plain";
+			}
+		}
+
+		// setType and setData are inexplicably intertwined
+		// calling setType by itself clears the type and vice-versa
+		// if you have both you _must_ call setDataAndType
 		if (type != null) {
 			if (DBG) {
 				Log.d(TAG, "Setting type: " + type);
-			} 
-			intent.setType(type);
-		} else {
-			if (action != null && action.equals(Intent.ACTION_SEND)) {
-				if (DBG) {
-					Log.d(TAG, "Intent type not set, defaulting to text/plain because action is a SEND action");
-				}
-				intent.setType("text/plain");
 			}
+			if (data != null) {
+				intent.setDataAndType(Uri.parse(data), type);
+			} else {
+				intent.setType(type);
+			}
+		} else if (data != null) {
+			intent.setData(Uri.parse(data));
 		}
-	}	
-	
+	}
+
+
+
 	@Kroll.method
-	public void putExtra(String key, Object value) 
+	public void putExtra(String key, Object value)
 	{
 		if (value instanceof String) {
 			intent.putExtra(key, (String) value);
@@ -172,6 +197,25 @@ public class IntentProxy extends KrollProxy
 		}
 	}
 
+
+	@Kroll.method
+	public void addFlags(int flags)
+	{
+		intent.addFlags(flags);
+	}
+
+	@Kroll.setProperty @Kroll.method
+	public void setFlags(int flags)
+	{
+		intent.setFlags(flags);
+	}
+
+	@Kroll.getProperty @Kroll.method
+	public int getFlags()
+	{
+		return intent.getFlags();
+	}
+
 	@Kroll.method
 	public void putExtraUri(String key, String uri)
 	{
@@ -179,7 +223,8 @@ public class IntentProxy extends KrollProxy
 	}
 
 	@Kroll.method
-	public void addCategory(String category) {
+	public void addCategory(String category)
+	{
 		if (category != null) {
 			if (DBG) {
 				Log.d(TAG, "Adding category: " + category);
@@ -187,43 +232,56 @@ public class IntentProxy extends KrollProxy
 			intent.addCategory(category);
 		}
 	}
-	
+
 	@Kroll.method
-	public String getStringExtra(String name) {
+	public String getStringExtra(String name)
+	{
 		return intent.getStringExtra(name);
 	}
-	
+
 	@Kroll.method
-	public boolean getBooleanExtra(String name, boolean defaultValue) {
+	public boolean getBooleanExtra(String name, boolean defaultValue)
+	{
 		return intent.getBooleanExtra(name, defaultValue);
 	}
-	
+
 	@Kroll.method
-	public int getIntExtra(String name, int defaultValue) {
+	public int getIntExtra(String name, int defaultValue)
+	{
 		return intent.getIntExtra(name, defaultValue);
 	}
-	
+
 	@Kroll.method
-	public long getLongExtra(String name, long defaultValue) {
+	public long getLongExtra(String name, long defaultValue)
+	{
 		return intent.getLongExtra(name, defaultValue);
 	}
-	
+
 	@Kroll.method
-	public double getDoubleExtra(String name, double defaultValue) {
+	public double getDoubleExtra(String name, double defaultValue)
+	{
 		return intent.getDoubleExtra(name, defaultValue);
 	}
-	
+
 	@Kroll.method @Kroll.getProperty
-	public String getData() {
+	public String getData()
+	{
 		return intent.getDataString();
 	}
-	
-	public Intent getIntent() { 
+
+	public Intent getIntent()
+	{ 
 		return intent;
 	}
-	
-	public void setForService(boolean value) {
-		forService = value;
+
+	public int getType()
+	{
+		return type;
+	}
+
+	public void setType(int type)
+	{
+		this.type = type;
 	}
 	
 	@Kroll.method
@@ -234,5 +292,4 @@ public class IntentProxy extends KrollProxy
 		}
 		return false;
 	}
-
 }

@@ -11,6 +11,10 @@
 #ifndef TI_BASE_H
 #define TI_BASE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MEMORY_DEBUG 0
 #define VIEW_DEBUG 0
 
@@ -400,6 +404,7 @@ extern NSString * const kTiAnalyticsNotification;
 extern NSString * const kTiRemoteDeviceUUIDNotification;
 extern NSString * const kTiGestureShakeNotification;
 extern NSString * const kTiRemoteControlNotification;
+
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_4_0
 extern NSString * const kTiLocalNotification;
 #endif
@@ -414,5 +419,9 @@ extern NSString * const kTiLocalNotification;
 
 #include "TiThreading.h"
 #include "TiPublicAPI.h"
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
