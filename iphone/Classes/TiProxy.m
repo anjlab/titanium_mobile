@@ -227,8 +227,16 @@ void DoProxyDelegateReadValuesWithKeysFromProxy(UIView<TiProxyDelegate> * target
 
 -(void)setModelDelegate:(id <TiProxyDelegate>)md
 {
-	RELEASE_TO_NIL(modelDelegate);
-	modelDelegate = [md retain];
+    if (modelDelegate != self) {
+        RELEASE_TO_NIL(modelDelegate);
+    }
+    
+    if (md != self) {
+        modelDelegate = [md retain];
+    }
+    else {
+        modelDelegate = md;
+    }
 }
 
 -(void)contextWasShutdown:(id<TiEvaluator>)context
@@ -372,7 +380,9 @@ void DoProxyDelegateReadValuesWithKeysFromProxy(UIView<TiProxyDelegate> * target
 	RELEASE_TO_NIL(listeners);
 	RELEASE_TO_NIL(baseURL);
 	RELEASE_TO_NIL(krollDescription);
-	RELEASE_TO_NIL(modelDelegate);
+    if (modelDelegate != self) {
+        RELEASE_TO_NIL(modelDelegate);
+    }
 	pageContext=nil;
 }
 
@@ -477,9 +487,13 @@ void DoProxyDelegateReadValuesWithKeysFromProxy(UIView<TiProxyDelegate> * target
 		eventObject = [NSMutableDictionary dictionary];
 	}
 	
-	// common event properties for all events we fire
-	[eventObject setObject:type forKey:@"type"];
-	[eventObject setObject:self forKey:@"source"];
+	// common event properties for all events we fire.. IF they're undefined.
+    if ([eventObject objectForKey:@"type"] == nil) {
+        [eventObject setObject:type forKey:@"type"];
+    }
+    if ([eventObject objectForKey:@"source"] == nil) {
+        [eventObject setObject:self forKey:@"source"];
+    }
 	
 	KrollContext* context = [listener context];
 	if (context!=nil)
