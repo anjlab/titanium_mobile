@@ -16,6 +16,7 @@
 #import "TiDOMDocumentProxy.h"
 #import "Mimetypes.h"
 #import "TiFile.h"
+#import "ASIDownloadCache.h"
 
 int CaselessCompare(const char * firstString, const char * secondString, int size)
 {
@@ -94,17 +95,47 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 
 @implementation TiNetworkHTTPClientProxy
 
-@synthesize onload, onerror, onreadystatechange, ondatastream, timeout, onsendstream;
-@synthesize validatesSecureCertificate;
+@synthesize timeout, validatesSecureCertificate, autoRedirect;
 
 -(id)init
 {
 	if (self = [super init])
 	{
 		readyState = NetworkClientStateUnsent;
-		validatesSecureCertificate = NO;
+		autoRedirect = [[NSNumber alloc] initWithBool:YES];
+		validatesSecureCertificate = [[NSNumber alloc] initWithBool:NO];
 	}
 	return self;
+}
+
+-(void)setOnload:(KrollCallback *)callback
+{
+	hasOnload = [callback isKindOfClass:[KrollCallback class]];
+	[self setValue:callback forUndefinedKey:@"onload"];
+}
+
+-(void)setOnerror:(KrollCallback *)callback
+{
+	hasOnerror = [callback isKindOfClass:[KrollCallback class]];
+	[self setValue:callback forUndefinedKey:@"onerror"];
+}
+
+-(void)setOnreadystatechange:(KrollCallback *)callback
+{
+	hasOnreadystatechange = [callback isKindOfClass:[KrollCallback class]];
+	[self setValue:callback forUndefinedKey:@"onreadystatechange"];
+}
+
+-(void)setOndatastream:(KrollCallback *)callback
+{
+	hasOndatastream = [callback isKindOfClass:[KrollCallback class]];
+	[self setValue:callback forUndefinedKey:@"ondatastream"];
+}
+
+-(void)setOnsendstream:(KrollCallback *)callback
+{
+	hasOnsendstream = [callback isKindOfClass:[KrollCallback class]];
+	[self setValue:callback forUndefinedKey:@"onsendstream"];
 }
 
 -(void)_destroy
@@ -114,14 +145,13 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 		[request cancel];
 	}
 	RELEASE_TO_NIL(url);
-	RELEASE_TO_NIL(onload);
-	RELEASE_TO_NIL(onerror);
-	RELEASE_TO_NIL(onreadystatechange);
-	RELEASE_TO_NIL(ondatastream);
-	RELEASE_TO_NIL(onsendstream);
 	RELEASE_TO_NIL(request);
+	RELEASE_TO_NIL(autoRedirect);
+    RELEASE_TO_NIL(timeout);
+    RELEASE_TO_NIL(validatesSecureCertificate);
 	[super _destroy];
 }
+
 
 -(id)description
 {
@@ -134,10 +164,13 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 	{
 		return [request responseStatusCode];
 	}
-	else 
-	{
-		return -1;
-	}
+	return -1;
+}
+
+-(NSString *)statusText
+{
+	//In the event request is nil, we get nil back anyways.
+	return [request responseStatusMessage];
 }
 
 -(NSInteger)readyState
@@ -239,15 +272,15 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 {
 	readyState = state;
 	TiNetworkHTTPClientResultProxy *thisPointer; 
-	if (onreadystatechange!=nil)
+	if (hasOnreadystatechange)
 	{
 		thisPointer = [[[TiNetworkHTTPClientResultProxy alloc] initWithDelegate:self] autorelease];
-		[self _fireEventToListener:@"readystatechange" withObject:nil listener:onreadystatechange thisObject:thisPointer];
+		[self fireCallback:@"onreadystatechange" withArg:[NSDictionary dictionaryWithObject:@"readystatechange" forKey:@"type"] withSource:thisPointer];
 	}
-	if (onload!=nil && state==NetworkClientStateDone && !failed)
+	if (state==NetworkClientStateDone && !failed)
 	{
 		thisPointer = [[[TiNetworkHTTPClientResultProxy alloc] initWithDelegate:self] autorelease];		
-		if (ondatastream && downloadProgress>0)
+		if (hasOndatastream && downloadProgress>0)
 		{
 			CGFloat progress = (CGFloat)((CGFloat)downloadProgress/(CGFloat)downloadLength);
 			if (progress < 1.0)
@@ -256,12 +289,12 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 				// so we need to synthesize this
 				progress = 1.0;
 				TiNetworkHTTPClientResultProxy *thisPointer = [[TiNetworkHTTPClientResultProxy alloc] initWithDelegate:self];
-				NSDictionary *event = [NSDictionary dictionaryWithObject:[NSNumber numberWithFloat:progress] forKey:@"progress"];
-				[self _fireEventToListener:@"datastream" withObject:event listener:ondatastream thisObject:thisPointer];
+				NSDictionary *event = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithFloat:progress],@"progress",@"datastream",@"type",nil];
+				[self fireCallback:@"ondatastream" withArg:event withSource:thisPointer];
 				[thisPointer release];
 			}
 		}
-		else if (onsendstream && uploadProgress>0)
+		else if (hasOnsendstream && uploadProgress>0)
 		{
 			CGFloat progress = (CGFloat)((CGFloat)uploadProgress/(CGFloat)uploadLength);
 			if (progress < 1.0)
@@ -270,12 +303,27 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 				// so we need to synthesize this
 				progress = 1.0;
 				TiNetworkHTTPClientResultProxy *thisPointer = [[TiNetworkHTTPClientResultProxy alloc] initWithDelegate:self];
-				NSDictionary *event = [NSDictionary dictionaryWithObject:[NSNumber numberWithFloat:progress] forKey:@"progress"];
-				[self _fireEventToListener:@"sendstream" withObject:event listener:onsendstream thisObject:thisPointer];
+				NSDictionary *event = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithFloat:progress],@"progress",@"sendstream",@"type",nil];
+				[self fireCallback:@"onsendstream" withArg:event withSource:thisPointer];
 				[thisPointer release];
 			}
 		}
-		[self _fireEventToListener:@"load" withObject:nil listener:onload thisObject:thisPointer];
+		
+		/**
+		 *	Per customer request, successful communications that resulted in an
+		 *	4xx or 5xx response is treated as an error instead of an onload.
+		 *	For backwards compatibility, if no error handler is provided, even
+		 *	an 4xx or 5xx response will fall back onto an onload.
+		 */
+		int responseCode = [request responseStatusCode];
+		if (hasOnerror && (responseCode >= 400) && (responseCode <= 599))
+		{
+			[self fireCallback:@"onerror" withArg:[NSDictionary dictionaryWithObject:@"error" forKey:@"type"] withSource:thisPointer];
+		}
+		else if(hasOnload)
+		{
+			[self fireCallback:@"onload" withArg:[NSDictionary dictionaryWithObject:@"load" forKey:@"type"] withSource:thisPointer];
+		}		
 	}
 }
 
@@ -286,6 +334,7 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 		connected = NO;
 		[[TiApp app] stopNetwork];
 		[request cancel];
+		[self forgetSelf];
 	}
 }
 
@@ -307,17 +356,18 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 	}
 	
 	request = [[ASIFormDataRequest requestWithURL:url] retain];	
+    [request setDownloadCache:[ASIDownloadCache sharedCache]];
 	[request setDelegate:self];
     if (timeout) {
         NSTimeInterval timeoutVal = [timeout doubleValue] / 1000;
         [request setTimeOutSeconds:timeoutVal];
     }
 	
-	if (onsendstream!=nil)
+	if (hasOnsendstream)
 	{
 		[request setUploadProgressDelegate:self];
 	}
-	if (ondatastream!=nil)
+	if (hasOndatastream)
 	{
 		[request setDownloadProgressDelegate:self];
 	}
@@ -342,12 +392,26 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 	[request setShouldUseRFC2616RedirectBehaviour:YES];
 	BOOL keepAlive = [TiUtils boolValue:[self valueForKey:@"enableKeepAlive"] def:YES];
 	[request setShouldAttemptPersistentConnection:keepAlive];
-	[request setShouldRedirect:YES];
-	[request setShouldPerformCallbacksOnMainThread:NO];
+	//handled in send, as now optional
+	//[request setShouldRedirect:YES];
 	[self _fireReadyStateChange:NetworkClientStateOpened failed:NO];
 	[self _fireReadyStateChange:NetworkClientStateHeaders failed:NO];
 }
+-(void)clearCookies:(id)args
+{
+    ENSURE_ARG_COUNT(args,1);
 
+    NSString *host = [TiUtils stringValue:[args objectAtIndex:0]];
+    
+    NSHTTPCookie *cookie;
+    NSHTTPCookieStorage *storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
+    NSArray* targetCookies = [storage cookiesForURL:[NSURL URLWithString:host]];
+    if ([targetCookies count] > 0) {
+      for (cookie in targetCookies) {
+          [storage deleteCookie:cookie];
+      }
+    }
+}
 -(void)setRequestHeader:(id)args
 {
 	ENSURE_ARG_COUNT(args,2);
@@ -393,6 +457,7 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 
 -(void)send:(id)args
 {
+	[self rememberSelf];
 	// HACK: We are never actually in the "OPENED" state.  Needs to be fixed with XHR refactor.
 	if (readyState != NetworkClientStateHeaders && readyState != NetworkClientStateOpened) {
 		// TODO: Throw an exception here as per XHR standard
@@ -467,8 +532,11 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 	[self _fireReadyStateChange:NetworkClientStateLoading failed:NO];
 	[request setAllowCompressedResponse:YES];
 	
-	// allow self-signed certs (NO) or required valid SSL (YES)
-	[request setValidatesSecureCertificate:validatesSecureCertificate];
+	// should it automatically redirect
+	[request setShouldRedirect:[autoRedirect boolValue]];
+
+	// allow self-signed certs (NO) or required valid SSL (YES)    
+	[request setValidatesSecureCertificate:[validatesSecureCertificate boolValue]];
 	
 	if (async)
 	{
@@ -524,6 +592,7 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 {
 	[self _fireReadyStateChange:NetworkClientStateDone failed:NO];
 	connected = NO;
+	[self forgetSelf];
 	[[TiApp app] stopNetwork];
 }
 
@@ -537,24 +606,25 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 	// TODO: Conform to XHR 'DONE' on error
 	[self _fireReadyStateChange:NetworkClientStateDone failed:YES];
 	
-	if (onerror!=nil)
+	if (hasOnerror)
 	{
 		TiNetworkHTTPClientResultProxy *thisPointer = [[[TiNetworkHTTPClientResultProxy alloc] initWithDelegate:self] autorelease];
-		NSDictionary *event = [NSDictionary dictionaryWithObject:[error description] forKey:@"error"];
-		[self _fireEventToListener:@"error" withObject:event listener:onerror thisObject:thisPointer];
+		NSDictionary *event = [NSDictionary dictionaryWithObjectsAndKeys:[error description],@"error",@"error",@"type",nil];
+		[self fireCallback:@"onerror" withArg:event withSource:thisPointer];
 	}
+	[self forgetSelf];
 }
 
 // Called when the request receives some data - bytes is the length of that data
 - (void)request:(ASIHTTPRequest *)request didReceiveBytes:(long long)bytes
 {
 	downloadProgress += bytes;
-	if (ondatastream)
+	if (hasOndatastream)
 	{
 		CGFloat progress = (CGFloat)((CGFloat)downloadProgress/(CGFloat)downloadLength);
 		TiNetworkHTTPClientResultProxy *thisPointer = [[TiNetworkHTTPClientResultProxy alloc] initWithDelegate:self];
-		NSDictionary *event = [NSDictionary dictionaryWithObject:[NSNumber numberWithFloat:progress] forKey:@"progress"];
-		[self _fireEventToListener:@"datastream" withObject:event listener:ondatastream thisObject:thisPointer];
+		NSDictionary *event = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithFloat:progress],@"progress",@"datastream",@"type",nil];
+		[self fireCallback:@"ondatastream" withArg:event withSource:thisPointer];
 		[thisPointer release];
 	}
 }
@@ -565,12 +635,12 @@ extern NSString * const TI_APPLICATION_DEPLOYTYPE;
 - (void)request:(ASIHTTPRequest *)request didSendBytes:(long long)bytes
 {
 	uploadProgress += bytes;
-	if (onsendstream)
+	if (hasOnsendstream)
 	{
 		CGFloat progress = (CGFloat)((CGFloat)uploadProgress/(CGFloat)uploadLength);
 		TiNetworkHTTPClientResultProxy *thisPointer = [[TiNetworkHTTPClientResultProxy alloc] initWithDelegate:self];
-		NSDictionary *event = [NSDictionary dictionaryWithObject:[NSNumber numberWithFloat:progress] forKey:@"progress"];
-		[self _fireEventToListener:@"sendstream" withObject:event listener:onsendstream thisObject:thisPointer];
+		NSDictionary *event = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithFloat:progress],@"progress",@"sendstream",@"type",nil];
+		[self fireCallback:@"onsendstream" withArg:event withSource:thisPointer];
 		[thisPointer release];
 	}
 }

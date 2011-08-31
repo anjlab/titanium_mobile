@@ -6,7 +6,6 @@
  */
 package ti.modules.titanium.database;
 
-import java.lang.reflect.Method;
 import java.util.HashMap;
 
 import org.appcelerator.kroll.KrollProxy;
@@ -14,10 +13,12 @@ import org.appcelerator.kroll.annotations.Kroll;
 import org.appcelerator.titanium.TiContext;
 import org.appcelerator.titanium.util.Log;
 import org.appcelerator.titanium.util.TiConfig;
+import org.appcelerator.titanium.util.TiConvert;
 
 import android.database.AbstractWindowedCursor;
 import android.database.Cursor;
 import android.database.SQLException;
+import android.os.Build;
 
 @Kroll.proxy
 public class TiResultSetProxy extends KrollProxy
@@ -25,26 +26,6 @@ public class TiResultSetProxy extends KrollProxy
 	private static final String LCAT = "TiResultSet";
 	private static final boolean DBG = TiConfig.LOGD;
 	
-	private static Method isFloat;
-	private static Method isLong;
-	private static Method isNull;
-	private static Class  args[];
-	static {
-		isFloat = null;
-		isLong  = null;
-		isNull  = null;
-		if (android.os.Build.VERSION.SDK_INT > 4) {
-			args = new Class[1];
-			args[0] = Integer.TYPE;
-			
-			try {
-				isFloat = AbstractWindowedCursor.class.getMethod("isFloat", args);
-				isLong  = AbstractWindowedCursor.class.getMethod("isLong",  args);
-				isNull  = AbstractWindowedCursor.class.getMethod("isNull",  args);
-			} catch (Exception e) {}
-		}
-	}
-
 	protected Cursor rs;
 	protected String lastException;
 	protected HashMap<String, Integer> columnNames; // workaround case-sensitive matching in Google's implementation
@@ -76,66 +57,147 @@ public class TiResultSetProxy extends KrollProxy
 	}
 
 	@Kroll.method
-	public Object field(int index) 
+	public Object field(Object[] args) 
 	{
-		return getField(index);
+		return internalGetField(args);
 	}
 
 	@Kroll.method
-	public Object getField(int index)
+	public Object getField(Object[] args) 
 	{
-		Object result = null;
-		if (rs != null) {
-			try {
-				boolean fromString = true;
-				if (isNull != null && rs instanceof AbstractWindowedCursor) {
-					AbstractWindowedCursor awc = (AbstractWindowedCursor) rs;
-					Object arguments[] = new Object[] { index };
-					try {
-						
-						if (((Boolean) isFloat.invoke(awc, arguments)).booleanValue()) {
-							result = awc.getDouble(index);
-							fromString = false;
-						} else if (((Boolean) isLong.invoke(awc, arguments)).booleanValue()) {
-							result = awc.getLong(index);
-							fromString = false;
-						} else if (((Boolean) isNull.invoke(awc, arguments)).booleanValue()) {
-							result = null;
-							fromString = false;
-						}
-					} catch (Exception e) {
-						Log.e(LCAT, "Error querying type from cursor", e);
-					}
-				}
+		return internalGetField(args);
+	}
 
-				if (fromString) {
-					result = rs.getString(index);
-				}
-			} catch (SQLException e) {
-				String msg = "No field at index " + index + ". msg=" + e.getMessage();
-				Log.e(LCAT, msg, e);
-				throw e;
+	private Object internalGetField(Object[] args) {
+		int index = -1;
+		int type = DatabaseModule.FIELD_TYPE_UNKNOWN;
+		if (args.length >= 1) {
+			if(args[0] instanceof Number) {
+				index = TiConvert.toInt(args[0]);
+			} else {
+				(new IllegalArgumentException("Expected int column index as first parameter was " + args[0].getClass().getSimpleName())).printStackTrace();
+				throw new IllegalArgumentException("Expected int column index as first parameter was " + args[0].getClass().getSimpleName());
 			}
 		}
+		if (args.length == 2) {
+			if (args[1] instanceof Number) {
+				type = TiConvert.toInt(args[1]);
+			} else {
+				throw new IllegalArgumentException("Expected int field type as second parameter was " + args[1].getClass().getSimpleName());
+			}
+		}
+		
+		 return internalGetField(index, type);
+	}
 
+	private Object internalGetField(int index, int type)
+	{
+		if (rs == null) {
+			Log.w(LCAT, "Attempted to get field value when no result set available.");
+			return null;
+		}
+		boolean outOfBounds = (index >= rs.getColumnCount());
+		Object result = null;
+		boolean fromString = false;
+
+		try {
+			if (rs instanceof AbstractWindowedCursor) {
+				AbstractWindowedCursor cursor = (AbstractWindowedCursor) rs;
+				if (cursor.isFloat(index)) {
+					result = cursor.getDouble(index);
+				} else if (cursor.isLong(index)) {
+					result = cursor.getLong(index);
+				} else if (cursor.isNull(index)) {
+					result = null;
+				} else {
+					fromString = true;
+				}
+			} else {
+				fromString = true;
+			}
+			if (fromString) {
+				result = rs.getString(index);
+			}
+			if (outOfBounds && Build.VERSION.SDK_INT >= 11) {
+				// TIMOB-4515: Column number doesn't exist, yet no exception
+				// occurred. This is known to happen in Honeycomb. So
+				// we'll throw instead. We throw the same exception type that
+				// Android would.
+				throw new IllegalStateException("Requested column number " + index + " does not exist");
+			}
+		} catch (RuntimeException e) {
+			// Both SQLException and IllegalStateException (exceptions known to occur
+			// in this block) are RuntimeExceptions and since we anyway re-throw
+			// and log the same error message, we're just catching all RuntimeExceptions.
+			Log.e(LCAT, "Exception getting value for column " + index + ": " + e.getMessage(), e);
+			throw e;
+		}
+
+		switch(type) {
+			case DatabaseModule.FIELD_TYPE_STRING :
+				if (!(result instanceof String)) {
+					result = TiConvert.toString(result);
+				}
+				break;
+			case DatabaseModule.FIELD_TYPE_INT :
+				if (!(result instanceof Integer) && !(result instanceof Long)) {
+					result = TiConvert.toInt(result);
+				}
+				break;
+			case DatabaseModule.FIELD_TYPE_FLOAT :
+				if (!(result instanceof Float)) {
+					result = TiConvert.toFloat(result);
+				}
+				break;
+			case DatabaseModule.FIELD_TYPE_DOUBLE :
+				if (!(result instanceof Double)) {
+					result = TiConvert.toDouble(result);
+				}
+				break;
+		}
 		return result;
 	}
 
 	@Kroll.method
-	public Object fieldByName(String fieldName) 
+	public Object fieldByName(Object[] args) 
 	{
-		return getFieldByName(fieldName);
+		return internalGetFieldByName(args);
 	}
 
 	@Kroll.method
-	public Object getFieldByName(String fieldName) 
+	public Object getFieldByName(Object[] args) {
+		return internalGetFieldByName(args);
+	}
+	
+	private Object internalGetFieldByName(Object[] args) {
+		String name = null;
+		int type = DatabaseModule.FIELD_TYPE_UNKNOWN;
+		if (args.length >= 1) {
+			if(args[0] instanceof String) {
+				name = (String) args[0];
+			} else {
+				throw new IllegalArgumentException("Expected string column name as first parameter" + args[0].getClass().getSimpleName());
+			}
+		}
+		if (args.length == 2) {
+			if (args[1] instanceof Number) {
+				type = TiConvert.toInt(args[1]);
+			} else {
+				throw new IllegalArgumentException("Expected int field type as second parameter" + args[1].getClass().getSimpleName());
+			}
+		}
+		
+		return internalGetFieldByName(name, type);
+	}
+	
+	private Object internalGetFieldByName(String fieldName, int type) 
 	{
 		Object result = null;
 		if (rs != null) {
 			try {
 				Integer ndx = columnNames.get(fieldName.toLowerCase());
 				if (ndx != null)
-					result = getField(ndx.intValue());
+					result = internalGetField(ndx.intValue(), type);
 			} catch (SQLException e) {
 				String msg = "Field name " + fieldName + " not found. msg=" + e.getMessage();
 				Log.e(LCAT, msg);
@@ -145,7 +207,7 @@ public class TiResultSetProxy extends KrollProxy
 		
 		return result;
 	}
-
+	
 	@Kroll.getProperty @Kroll.method
 	public int getFieldCount() 
 	{

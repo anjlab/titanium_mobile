@@ -4,7 +4,7 @@ var data = [
 	{title:'Scrolling Tabs', hasChild:true, test:'../examples/scroll_views_tabs.js'},
 	{title:'Scrollable View', hasChild:true, test:'../examples/scroll_views_scrollable.js'},
 	{title:'Many on a Screen', hasChild:true, test:'../examples/scroll_views_many.js'},
-	{title:'Scroll Views TextArea', hasChild:true, test:'../examples/scroll_views_textareas.js'},
+	{title:'Scroll Views TextArea', hasChild:true, test:'../examples/scroll_views_textareas.js'}
 
 ];
 
@@ -13,6 +13,7 @@ if (Titanium.Platform.name == 'iPhone OS')
 {
 	data.push({title:'Scrollable View w/o Clipping', hasChild:true, test:'../examples/scroll_views_without_clipping.js', barColor:'#111', bgImage:'../images/scrollable_view/bg.png'});
 	data.push({title:'Scrolling Zoom+Pinch', hasChild:true, test:'../examples/scroll_views_scaling.js'});
+    data.push({title:'Scrolling Drag Start&End', hasChild:true, test:'../examples/scroll_views_dragging.js'});
 }
 
 // create table view

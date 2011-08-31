@@ -148,7 +148,10 @@
 		// FIRST!  We know the orientation now, so attach the splash!
 		UIInterfaceOrientation oldOrientation = [[UIApplication sharedApplication] statusBarOrientation];
 		windowOrientation = oldOrientation;
-		[self manuallyRotateToOrientation:newOrientation duration:0];
+
+        [self shouldAutorotateToInterfaceOrientation:newOrientation];	// side effect, retag timestamp on old orientation
+		
+        [self manuallyRotateToOrientation:newOrientation duration:0];
 		if (![[TiApp app] isSplashVisible]) {
 			[[TiApp app] loadSplash];
 		}
@@ -188,7 +191,6 @@
 - (void)viewWillAppear:(BOOL)animated;    // Called when the view is about to made visible. Default does nothing
 {
 	VerboseLog(@"%@%@",self,CODELOCATION);
-	isCurrentlyVisible = YES;
 	[[viewControllerStack lastObject] viewWillAppear:animated];
 }
 - (void)viewWillDisappear:(BOOL)animated; // Called when the view is dismissed, covered or otherwise hidden. Default does nothing
@@ -199,7 +201,13 @@
 
 - (void) viewDidAppear:(BOOL)animated
 {
+   	isCurrentlyVisible = YES;
 	[self.view becomeFirstResponder];
+	CGFloat duration = 0.0;
+	if (animated) {
+		duration = [[UIApplication sharedApplication] statusBarOrientationAnimationDuration];
+	}
+	[self manuallyRotateToOrientation:[self mostRecentlyAllowedOrientation] duration:duration];
     [super viewDidAppear:animated];
 	VerboseLog(@"%@%@",self,CODELOCATION);
 	[[viewControllerStack lastObject] viewDidAppear:animated];
@@ -239,18 +247,6 @@
 -(void)manuallyRotateToOrientation:(UIInterfaceOrientation)newOrientation duration:(NSTimeInterval)duration
 {
 	UIApplication * ourApp = [UIApplication sharedApplication];
-	if (newOrientation != [ourApp statusBarOrientation])
-	{
-		[keyboardFocusedProxy blur:nil];
-		[ourApp setStatusBarOrientation:newOrientation animated:(duration > 0.0)];
-		[keyboardFocusedProxy focus:nil];
-	}
-	
-	// if already in the orientation, don't do it again
-	if (lastOrientation==newOrientation)
-	{
-		return;
-	}
 
 	CGAffineTransform transform;
 
@@ -270,29 +266,43 @@
 			break;
 	}
 
-	for (TiWindowProxy * thisProxy in windowProxies)
-	{
-		UIViewController * thisNavCon = [thisProxy navController];
-		if (thisNavCon == nil)
-		{
-			thisNavCon = [thisProxy controller];
-		}
-		[thisNavCon willAnimateRotationToInterfaceOrientation:newOrientation duration:duration];
-	}
-
-
-	if (duration > 0.0)
+    // Have to batch all of the animations together, so that it doesn't look funky
+    if (duration > 0.0)
 	{
 		[UIView beginAnimations:@"orientation" context:nil];
 		[UIView setAnimationDuration:duration];
 	}
-
-	[[self view] setTransform:transform];
+    
+	for (TiWindowProxy * thisProxy in windowProxies)
+	{
+        if ([thisProxy allowsOrientation:newOrientation]) {
+            UIViewController * thisNavCon = [thisProxy navController];
+            if (thisNavCon == nil)
+            {
+                thisNavCon = [thisProxy controller];
+            }
+            [thisNavCon willAnimateRotationToInterfaceOrientation:newOrientation duration:duration];
+        }
+        else {
+            [thisProxy ignoringRotationToOrientation:newOrientation];
+        }
+	}
+    
+    if (newOrientation != [ourApp statusBarOrientation] && isCurrentlyVisible)
+    {
+        [keyboardFocusedProxy blur:nil];
+        [ourApp setStatusBarOrientation:newOrientation animated:(duration > 0.0)];
+        [keyboardFocusedProxy focus:nil];
+    }
+    
+    [[self view] setTransform:transform];
+    [self resizeView];
+    
+    //Propigate this to everyone else. This has to be done INSIDE the animation.
+    [self repositionSubviews];
+    
 	lastOrientation = newOrientation;
-	[self resizeView];
 
-	//Propigate this to everyone else. This has to be done INSIDE the animation.
-	[self repositionSubviews];
 	
 	if (duration > 0.0)
 	{
@@ -302,7 +312,8 @@
 
 -(void)manuallyRotateToOrientation:(UIInterfaceOrientation) newOrientation
 {
-	[self manuallyRotateToOrientation:newOrientation duration:[[UIApplication sharedApplication] statusBarOrientationAnimationDuration]];
+	NSTimeInterval animation = ([self focusedViewController]==nil)?0.0:[[UIApplication sharedApplication] statusBarOrientationAnimationDuration];
+	[self manuallyRotateToOrientation:newOrientation duration:animation];
 }
 
 - (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration
@@ -337,6 +348,11 @@
 	}
 	
 	return defaultFlags;
+}
+
+-(TiOrientationFlags)allowedOrientations
+{
+    return allowedOrientations;
 }
 
 -(void)setOrientationModes:(NSArray *)newOrientationModes
@@ -391,7 +407,7 @@
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation 
 {
 	orientationRequestTimes[interfaceOrientation] = [NSDate timeIntervalSinceReferenceDate];
-	return TI_ORIENTATION_ALLOWED(allowedOrientations,interfaceOrientation);
+	return TI_ORIENTATION_ALLOWED(allowedOrientations,interfaceOrientation) ? YES : NO;
 }
 
 
@@ -532,6 +548,11 @@ What this does mean is that any
 	return [windowViewControllers lastObject];
 }
 
+-(BOOL)isTopWindow:(TiWindowProxy *)window
+{
+    return [[windowProxies lastObject] isEqual:window];
+}
+
 #pragma mark Remote Control Notifications
 
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_4_0
@@ -634,6 +655,11 @@ What this does mean is that any
 
 #pragma mark Keyboard handling
 
+-(UIView *)viewForKeyboardAccessory;
+{
+	return [[[[TiApp app] window] subviews] lastObject];
+}
+
 -(void)extractKeyboardInfo:(NSDictionary *)userInfo
 {
 	NSValue *v = nil;
@@ -684,7 +710,7 @@ What this does mean is that any
 		startingFrame.origin.y = startingCenter.y - startingFrame.size.height/2.0;
 	}
 
-	UIView * ourView = [self view];
+	UIView * ourView = [self viewForKeyboardAccessory];
 
 	startFrame = [ourView convertRect:startingFrame fromView:nil];
 	endFrame = [ourView convertRect:endingFrame fromView:nil];
@@ -775,10 +801,10 @@ What this does mean is that any
 	if (enteringAccessoryView != nil)
 	{
 		//Start animation to put it into place.
-		if([enteringAccessoryView superview] != [self view])
+		if([enteringAccessoryView superview] != [self viewForKeyboardAccessory])
 		{
 			[self placeView:enteringAccessoryView nearTopOfRect:startFrame aboveTop:NO];
-			[[self view] addSubview:enteringAccessoryView];
+			[[self viewForKeyboardAccessory] addSubview:enteringAccessoryView];
 		}
 		targetedFrame = endFrame;
 		[UIView beginAnimations:@"enter" context:enteringAccessoryView];

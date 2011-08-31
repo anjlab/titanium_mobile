@@ -258,14 +258,14 @@ NSArray* moviePlayerKeys = nil;
 
 -(void)setInitialPlaybackTime:(id)time
 {
-	if (movie != nil) {
-		CGFloat ourTime = [TiUtils doubleValue:time];
-		if (ourTime > 0) {
-			ENSURE_UI_THREAD_1_ARG(time);
+    ENSURE_UI_THREAD_1_ARG(time);
+	if (movie) {
+		double ourTime = [TiUtils doubleValue:time];
+		if (ourTime > 0 || isnan(ourTime)) { 
+            ourTime /= 1000.0f; // convert from milliseconds to seconds
 			[[self player] setInitialPlaybackTime:ourTime];
 		}
-	}
-	else {
+	} else {
 		[loadProperties setValue:time forKey:@"initialPlaybackTime"];
 	}
 }
@@ -273,7 +273,11 @@ NSArray* moviePlayerKeys = nil;
 -(NSNumber*)initialPlaybackTime
 {
 	if (movie != nil) {
-		return NUMDOUBLE([[self player] initialPlaybackTime]);
+        NSTimeInterval n = [[self player] initialPlaybackTime];
+        if (n == -1) {
+            n = NAN;
+        }
+		return NUMDOUBLE(1000.0f * n);
 	}
 	else {
 		RETURN_FROM_LOAD_PROPERTIES(@"initialPlaybackTime", NUMINT(0));
@@ -425,14 +429,14 @@ NSArray* moviePlayerKeys = nil;
 {
 	if ([media_ isKindOfClass:[TiFile class]])
 	{
-		[self setUrl:[media_ path]];
+		[self setUrl:[NSURL fileURLWithPath:[media_ path]]];
 	}
 	else if ([media_ isKindOfClass:[TiBlob class]])
 	{
 		TiBlob *blob = (TiBlob*)media_;
 		if ([blob type] == TiBlobTypeFile)
 		{
-			[self setUrl:[blob path]];
+			[self setUrl:[blob nativePath]];
 		}
 		else if ([blob type] == TiBlobTypeData)
 		{
@@ -641,7 +645,7 @@ NSArray* moviePlayerKeys = nil;
 	ONLY_IN_3_2_OR_GREATER(playableDuration)
 	
 	if (movie != nil) {
-		return NUMDOUBLE([[self player] playableDuration]);
+		return NUMDOUBLE(1000.0f * [[self player] playableDuration]);
 	}
 	else {
 		return NUMINT(0);
@@ -653,7 +657,7 @@ NSArray* moviePlayerKeys = nil;
 	ONLY_IN_3_2_OR_GREATER(duration)
 	
 	if (movie != nil) {
-		return NUMDOUBLE([[self player] duration]);
+		return NUMDOUBLE(1000.0f * [[self player] duration]);
 	}
 	else {
 		return NUMINT(0);
@@ -665,7 +669,7 @@ NSArray* moviePlayerKeys = nil;
 	ONLY_IN_3_2_OR_GREATER(currentPlaybackTime)
 	
 	if (movie != nil) {
-		return NUMDOUBLE([[self player] currentPlaybackTime]);
+		return NUMDOUBLE(1000.0f * [[self player] currentPlaybackTime]);
 	}
 	else {
 		return NUMINT(0);
@@ -677,9 +681,12 @@ NSArray* moviePlayerKeys = nil;
 	ONLY_IN_3_2_OR_GREATER(endPlaybackTime)
 	
 	if (movie != nil) {
-		return NUMDOUBLE([[self player] endPlaybackTime]);
-	}
-	else {
+        NSTimeInterval n = [[self player] endPlaybackTime];
+        if (n == -1) {
+            n = NAN;
+        }
+		return NUMDOUBLE(1000.0f * n);
+	} else {
 		return NUMINT(0);
 	}
 }
@@ -1130,8 +1137,12 @@ NSArray* moviePlayerKeys = nil;
 		if ([TiUtils isiPhoneOS3_2OrGreater] && [self viewAttached]) {
 			TiMediaVideoPlayer *vp = (TiMediaVideoPlayer*)[self view];
 			[vp movieLoaded];
-		}
-        else {
+			if (player.loadState == MPMovieLoadStatePlayable) {
+				if ([self _hasListeners:@"load"]) {
+					[self fireEvent:@"load" withObject:nil];
+				}
+			}
+		} else {
             loaded = YES;
         }
 	}

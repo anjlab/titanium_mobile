@@ -5,7 +5,7 @@
 # the application on the device via iTunes
 # 
 
-import os, sys, uuid, subprocess, shutil, signal, string, traceback, imp
+import os, sys, uuid, subprocess, shutil, signal, string, traceback, imp, filecmp, inspect
 import platform, time, re, run, glob, codecs, hashlib, datetime, plistlib
 from compiler import Compiler
 from projector import Projector
@@ -491,6 +491,7 @@ def main(args):
 		debug_host = None
 		debug_port = None
 		debughost = None
+		postbuild_modules = []
 		
 		# starting in 1.4, you don't need to actually keep the build/iphone directory
 		# if we don't find it, we'll just simply re-generate it
@@ -511,6 +512,7 @@ def main(args):
 			output_dir = os.path.expanduser(dequote(args[8].decode("utf-8")))
 			if argc > 9:
 				devicefamily = dequote(args[9].decode("utf-8"))
+			print "[INFO] Switching to production mode for distribution"
 			deploytype = 'production'
 		elif command == 'simulator':
 			link_version = check_iphone_sdk(iphone_version)
@@ -547,6 +549,7 @@ def main(args):
 					debughost=None
 				else:
 					debughost,debugport = debughost.split(":")
+			target = 'Debug'
 			deploytype = 'test'
 		
 		# setup up the useful directories we need in the script
@@ -653,8 +656,18 @@ def main(args):
 						module_dir = os.path.join(app_dir, 'modules', module_id)
 						module_asset_dirs.append([module_assets_dir, module_dir])
 
+			full_version = sdk_version
+			if 'version' in versions_txt:
+				full_version = versions_txt['version']
+				if 'timestamp' in versions_txt or 'githash' in versions_txt:
+					full_version += ' ('
+					if 'timestamp' in versions_txt:
+						full_version += '%s' % versions_txt['timestamp']
+					if 'githash' in versions_txt:
+						full_version += ' %s' % versions_txt['githash']
+					full_version += ')'
 
-			print "[INFO] Titanium SDK version: %s" % sdk_version
+			print "[INFO] Titanium SDK version: %s" % full_version
 			print "[INFO] iPhone Device family: %s" % devicefamily
 			print "[INFO] iPhone SDK version: %s" % iphone_version
 			
@@ -698,14 +711,20 @@ def main(args):
 				else:
 					plist = plist.replace('__DEBUGGER_HOST__','')
 					plist = plist.replace('__DEBUGGER_PORT__','')
-				pf = codecs.open(debuggerplist,'w', encoding='utf-8')
+
+				tempfile = debuggerplist+'.tmp'
+				pf = codecs.open(tempfile,'w',encoding='utf-8')
 				pf.write(plist)
-				pf.close()	
-				o.write("+ writing debugger plist:\n\n")
-				pf = codecs.open(debuggerplist,'r', encoding='utf-8')
-				o.write(pf.read())
 				pf.close()
-				o.write("\n\n")
+				
+				if os.path.exists(debuggerplist):
+					changed = not filecmp.cmp(tempfile, debuggerplist, shallow=False)
+				else:
+					changed = True
+					
+				shutil.move(tempfile, debuggerplist)
+				
+				return changed
 				
 				
 # TODO:				
@@ -815,8 +834,8 @@ def main(args):
 				contents="TI_VERSION=%s\n"% sdk_version
 				contents+="TI_SDK_DIR=%s\n" % template_dir.replace(sdk_version,'$(TI_VERSION)')
 				contents+="TI_APPID=%s\n" % appid
-				contents+="OTHER_LDFLAGS[sdk=iphoneos4*]=$(inherited) -weak_framework iAd\n"
-				contents+="OTHER_LDFLAGS[sdk=iphonesimulator4*]=$(inherited) -weak_framework iAd\n"
+				contents+="OTHER_LDFLAGS[sdk=iphoneos*]=$(inherited) -weak_framework iAd\n"
+				contents+="OTHER_LDFLAGS[sdk=iphonesimulator*]=$(inherited) -weak_framework iAd\n"
 				contents+="#include \"module\"\n"
 				xcconfig = open(project_xcconfig,'w+')
 				xccontents = xcconfig.read()
@@ -886,18 +905,10 @@ def main(args):
 
 			# compile debugger file
 			debug_plist = os.path.join(iphone_dir,'Resources','debugger.plist')
-			write_debugger_plist(debug_plist)
+			
+			# Force an xcodebuild if the debugger.plist has changed
+			force_xcode = write_debugger_plist(debug_plist)
 
-			if command=='simulator':
-				debug_sim_dir = os.path.join(iphone_dir,'build','Debug-iphonesimulator','%s.app' % name)
-				if os.path.exists(debug_sim_dir):
-					app_stylesheet = os.path.join(iphone_dir,'build','Debug-iphonesimulator','%s.app' % name,'stylesheet.plist')
-					asf = codecs.open(app_stylesheet,'w','utf-8')
-					asf.write(cssc.code)
-					asf.close()
-					
-					shutil.copy(debug_plist,os.path.join(iphone_dir,'build','Debug-iphonesimulator','%s.app' % name, 'debugger.plist'))
-					
 			if command!='simulator':
 				# compile plist into binary format so it's faster to load
 				# we can be slow on simulator
@@ -964,6 +975,11 @@ def main(args):
 					m.update(open(code_path,'rb').read()) 
 					code_hash = m.hexdigest()
 					p = imp.load_source(code_hash, code_path, fin)
+					module_functions = dict(inspect.getmembers(p, inspect.isfunction))
+					if module_functions.has_key('postbuild'):
+						print "[DBEUG] Plugin has postbuild"
+						o.write("+ Plugin has postbuild")
+						postbuild_modules.append((plugin['name'], p))
 					p.compile(compiler_config)
 					fin.close()
 					
@@ -987,7 +1003,7 @@ def main(args):
 
 				# compile localization files
 				# Using app_name here will cause the locale to be put in the WRONG bundle!!
-				localecompiler.LocaleCompiler(name,project_dir,devicefamily,command).compile()
+				localecompiler.LocaleCompiler(name,project_dir,devicefamily,deploytype).compile()
 				
 				# copy any module resources
 				if len(module_asset_dirs)>0:
@@ -1008,6 +1024,7 @@ def main(args):
 
 				# copy Default.png and appicon each time so if they're 
 				# changed they'll stick get picked up	
+				# If Default.png is not found in the project, copy it from the SDK's default path
 				app_icon_path = os.path.join(project_dir,'Resources','iphone',applogo)
 				if not os.path.exists(app_icon_path):
 					app_icon_path = os.path.join(project_dir,'Resources',applogo)
@@ -1016,8 +1033,10 @@ def main(args):
 				defaultpng_path = os.path.join(project_dir,'Resources','iphone','Default.png')
 				if not os.path.exists(defaultpng_path):
 					defaultpng_path = os.path.join(project_dir,'Resources','Default.png')
+				if not os.path.exists(defaultpng_path):
+					defaultpng_path = os.path.join(template_dir,'resources','Default.png')
 				if os.path.exists(defaultpng_path):
-					shutil.copy(defaultpng_path,app_dir)
+					shutil.copy(defaultpng_path,iphone_resources_dir)
 
 				extra_args = None
 
@@ -1035,6 +1054,12 @@ def main(args):
 					# Additionally, if we're universal, change the device family target
 					if devicefamily == 'universal':
 						device_target="TARGETED_DEVICE_FAMILY=1,2"
+
+				kroll_coverage = ""
+				if ti.has_app_property("ti.ios.enablecoverage"):
+					enable_coverage = ti.to_bool(ti.get_app_property("ti.ios.enablecoverage"))
+					if enable_coverage:
+						kroll_coverage = "KROLL_COVERAGE=1"
 
 				def execute_xcode(sdk,extras,print_output=True):
 
@@ -1110,6 +1135,18 @@ def main(args):
 						print "[ERROR] Code sign error: %s" % error[0].strip()
 						sys.stdout.flush()
 						sys.exit(1)
+					
+				def run_postbuild():
+					try:
+						if postbuild_modules:
+							for p in postbuild_modules:
+								o.write("Running postbuild %s" % p[0])
+								print "[INFO] Running postbuild %s..." % p[0]
+								p[1].postbuild()
+					except Exception,e:
+						o.write("Error in post-build: %s" % e)
+						print "[ERROR] Error in post-build: %s" % e
+						
 
 				# build the final release distribution
 				args = []
@@ -1137,17 +1174,18 @@ def main(args):
 					f = open(version_file,'w+')
 					f.write("%s,%s,%s,%s" % (template_dir,log_id,lib_hash,githash))
 					f.close()
-
+					
 				# this is a simulator build
 				if command == 'simulator':
-
 					debugstr = ''
 					if debughost:
 						debugstr = 'DEBUGGER_ENABLED=1'
 					
 					if force_rebuild or force_xcode or not os.path.exists(binary):
-						execute_xcode("iphonesimulator%s" % link_version,["GCC_PREPROCESSOR_DEFINITIONS=__LOG__ID__=%s DEPLOYTYPE=development TI_DEVELOPMENT=1 DEBUG=1 TI_VERSION=%s %s" % (log_id,sdk_version,debugstr)],False)
-
+						execute_xcode("iphonesimulator%s" % link_version,["GCC_PREPROCESSOR_DEFINITIONS=__LOG__ID__=%s DEPLOYTYPE=development TI_DEVELOPMENT=1 DEBUG=1 TI_VERSION=%s %s %s" % (log_id,sdk_version,debugstr,kroll_coverage)],False)
+						
+					run_postbuild()
+					
 					# first make sure it's not running
 					kill_simulator()
 
@@ -1298,7 +1336,7 @@ def main(args):
 						debugstr = 'DEBUGGER_ENABLED=1'
 						
 					args += [
-						"GCC_PREPROCESSOR_DEFINITIONS=DEPLOYTYPE=test TI_TEST=1 %s" % debugstr,
+						"GCC_PREPROCESSOR_DEFINITIONS=DEPLOYTYPE=test TI_TEST=1 %s %s" % (debugstr, kroll_coverage),
 						"PROVISIONING_PROFILE=%s" % appuuid,
 						"CODE_SIGN_IDENTITY=iPhone Developer: %s" % dist_name,
 						"DEPLOYMENT_POSTPROCESSING=YES"
@@ -1348,6 +1386,8 @@ def main(args):
 					sys.stdout.flush()
 					script_ok = True
 					
+					run_postbuild()
+					
 				###########################################################################	
 				# END OF INSTALL COMMAND	
 				###########################################################################	
@@ -1386,6 +1426,8 @@ def main(args):
 					
 					o.write("Finishing build\n")
 					script_ok = True
+					
+					run_postbuild()
 
 				###########################################################################	
 				# END OF DISTRIBUTE COMMAND	

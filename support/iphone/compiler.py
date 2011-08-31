@@ -88,6 +88,57 @@ def read_module_properties(dir):
 			dict[k]=v
 	return dict
 
+# Need to pre-parse xcconfig files to mangle variable names, and then
+# dump them into a map so that we can re-assemble them later
+def parse_xcconfig(xcconfig, moduleId, variables):
+	module_xcconfig = open(xcconfig)
+	new_xcconfig = ''
+	local_variables = {}
+    	
+	prefix = moduleId.upper().replace('.','_')
+	for line in module_xcconfig:
+		# Strip comments
+		comment = line.find('//')
+		if comment != -1:
+			line = line[0:comment]
+		
+		# Generate new varname / value pairings
+		# The regular expression parses a valid line into components
+		#   <var>=<value>
+		#   <var>[<key>=<keyvalue>]=<value>
+		#   e.g.
+		#     OTHER_LDFLAGS=-framework EventKit
+		#     OTHER_LDFLAGS[sdk=iphoneos4*]=-liconv
+		splitline = re.split('(([^\[=]+)(\[[^\]]+\])?) *=? *(.+)', line)
+		
+		if len(splitline) >= 5:
+			varname = splitline[1]
+			value = splitline[4]
+					
+			name = prefix + '_' + varname.strip()
+			name = re.sub(r'[^\w]', '_', name)
+			local_variables[varname] = name
+			new_xcconfig += name + '=' + value + '\n'
+			
+	module_xcconfig.close()
+    
+	# Update any local variable references with new varname
+	# and add variables to the global variables map
+	for (varname, name) in local_variables.iteritems():
+		source = '$(%s)' % varname
+		target = '$(%s)' % name
+		new_xcconfig = new_xcconfig.replace(source,target)    
+	
+		# Add new varname to the list
+		if not varname in variables:
+			variables[varname] = [name]
+		else:
+			variables[varname].append(name)
+	
+	new_xcconfig += '\n'
+	
+	return new_xcconfig
+		
 #
 # TODO/FIXME
 #
@@ -106,7 +157,7 @@ class Compiler(object):
 		self.modules_metadata = []
 		
 		# for now, these are required
-		self.defines = ['USE_TI_ANALYTICS','USE_TI_NETWORK','USE_TI_PLATFORM','USE_TI_UI']
+		self.defines = ['USE_TI_ANALYTICS','USE_TI_NETWORK','USE_TI_PLATFORM','USE_TI_UI', 'USE_TI_API']
 
 		tiapp_xml = os.path.join(project_dir,'tiapp.xml')
 		ti = TiAppXML(tiapp_xml)
@@ -139,10 +190,7 @@ class Compiler(object):
 		main_template = main_template.replace('__APP_DESCRIPTION__',ti.properties['description'])
 		main_template = main_template.replace('__APP_COPYRIGHT__',ti.properties['copyright'])
 		main_template = main_template.replace('__APP_GUID__',ti.properties['guid'])
-		if deploytype=='development':
-			main_template = main_template.replace('__APP_RESOURCE_DIR__',os.path.abspath(os.path.join(project_dir,'Resources')))
-		else:
-			main_template = main_template.replace('__APP_RESOURCE_DIR__','')
+		main_template = main_template.replace('__APP_RESOURCE_DIR__','')
 
 		if not silent:
 			print "[INFO] Titanium SDK version: %s" % sdk_version
@@ -180,6 +228,7 @@ class Compiler(object):
 
 		if len(modules) > 0:
 			mods = open(os.path.join(self.classes_dir,'ApplicationMods.m'),'w+')
+			variables = {}
 			mods.write(MODULE_IMPL_HEADER)
 			for module in modules:
 				module_id = module.manifest.moduleid.lower()
@@ -194,15 +243,24 @@ class Compiler(object):
 				self.modules_metadata.append({'guid':module_guid,'name':module_name,'id':module_id,'dir':module.path,'version':module_version,'licensekey':module_licensekey})
 				xcfile = module.get_resource('module.xcconfig')
 				if os.path.exists(xcfile):
-					xcconfig_c+="#include \"%s\"\n" % xcfile
+					xcconfig_contents = parse_xcconfig(xcfile, module_id, variables)
+					xcconfig_c += xcconfig_contents
 				xcfile = os.path.join(self.project_dir,'modules','iphone',"%s.xcconfig" % module_name)
 				if os.path.exists(xcfile):
-					xcconfig_c+="#include \"%s\"\n" % xcfile
+					xcconfig_contents = parse_xcconfig(xcfile, module_id, variables)
+					xcconfig_c += xcconfig_contents
 				mods.write("	[modules addObject:[NSDictionary dictionaryWithObjectsAndKeys:@\"%s\",@\"name\",@\"%s\",@\"moduleid\",@\"%s\",@\"version\",@\"%s\",@\"guid\",@\"%s\",@\"licensekey\",nil]];\n" % (module_name,module_id,module_version,module_guid,module_licensekey));
 			mods.write("	return modules;\n")	
 			mods.write("}\n")
 			mods.write(FOOTER)
 			mods.close()
+			
+			for (name, values) in variables.iteritems():
+				xcconfig_c += name + '=$(inherited) '
+				for value in values:
+					xcconfig_c += '$(%s) ' % value
+				xcconfig_c += '\n'
+			
 			has_modules = True
 			xcconfig = os.path.join(self.iphone_dir,"module.xcconfig")
 			make_xcc = True
@@ -220,7 +278,7 @@ class Compiler(object):
 		
 		if deploytype!='development' or has_modules:
 
-			if os.path.exists(app_dir):
+			if os.path.exists(app_dir) and deploytype != 'development':
 				self.copy_resources([resources_dir],app_dir)
 				
 			if deploytype == 'production':
@@ -267,7 +325,10 @@ class Compiler(object):
 			
 		else:
 			print "[INFO] Skipping JS compile, running from simulator"
-	
+		
+		if deploytype=='development':
+			self.softlink_resources(resources_dir,app_dir)
+			self.softlink_resources(iphone_resources_dir,app_dir)
 	
 	def add_symbol(self,api):
 		print "[DEBUG] detected symbol: %s" % api
@@ -358,6 +419,22 @@ class Compiler(object):
 		data = str(file_contents).encode("hex")
 		method = "dataWithHexString(@\"%s\")" % data
 		return {'method':method,'path':path}
+	
+	def softlink_resources(self,source,target):
+		if not os.path.exists(target):
+			os.makedirs(target)
+		for file in os.listdir(source):
+			if (file in ignoreDirs) or (file in ignoreFiles):
+				continue
+			from_ = os.path.join(source, file)
+			to_ = os.path.join(target, file)
+			print "[DEBUG] linking: %s to %s" % (from_,to_)
+			if os.path.exists(to_):
+				if os.path.islink(to_):
+					os.remove(to_)
+					os.symlink(from_, to_)
+			else:
+				os.symlink(from_, to_)
 	
 	def copy_resources(self,sources,target,write_routing=True):
 		

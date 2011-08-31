@@ -4,7 +4,7 @@ var data = [
 	{title:'Alice', hasDetail:true},
 	{title:'Alexander', hasCheck:true},
 	{title:'Amos'},
-	{title:'Alonzo', footer:'footer'},
+	{title:'Alonzo', footer:'footer'}
 ];
 
 // create table view
@@ -12,15 +12,27 @@ var tableview = Titanium.UI.createTableView({
 	data:data
 });
 
-// create table view event listener
-tableview.addEventListener('click', function(e)
-{
+function showClickEventInfo(e, islongclick) {
 	// event data
 	var index = e.index;
 	var section = e.section;
 	var row = e.row;
 	var rowdata = e.rowData;
-	Titanium.UI.createAlertDialog({title:'Table View',message:'row ' + row + ' index ' + index + ' section ' + section  + ' row data ' + rowdata}).show();
+	var msg = 'row ' + row + ' index ' + index + ' section ' + section  + ' row data ' + rowdata;
+	if (islongclick) {
+		msg = "LONGCLICK " + msg;
+	}
+	Titanium.UI.createAlertDialog({title:'Table View',message:msg}).show();
+}
+
+// create table view event listener
+tableview.addEventListener('click', function(e)
+{
+	showClickEventInfo(e);
+});
+tableview.addEventListener('longclick', function(e)
+{
+	showClickEventInfo(e, true);
 });
 // add table view to the window
 Titanium.UI.currentWindow.add(tableview);

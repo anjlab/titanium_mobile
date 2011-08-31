@@ -256,12 +256,28 @@ TiProxy * DeepScanForProxyOfViewContainingPoint(UIView * targetView, CGPoint poi
 
 @synthesize tableClass, table, section, row, callbackCell;
 
+-(void)setCallbackCell:(TiUITableViewCell *)newValue
+{
+	if (newValue == callbackCell)
+	{
+		return;
+	}
+	if ([callbackCell proxy] == self)
+	{
+		[callbackCell setProxy:nil];
+	}
+	[callbackCell release];
+	callbackCell = [newValue retain];
+}
+
 -(void)_destroy
 {
-	RELEASE_TO_NIL(table);
 	RELEASE_TO_NIL(tableClass);
-	RELEASE_TO_NIL(rowContainerView);
-	RELEASE_TO_NIL(callbackCell);
+	[rowContainerView performSelectorOnMainThread:@selector(release) withObject:nil waitUntilDone:NO];
+	rowContainerView = nil;
+	[callbackCell setProxy:nil];
+	[callbackCell performSelectorOnMainThread:@selector(release) withObject:nil waitUntilDone:NO];
+	callbackCell = nil;
 	[super _destroy];
 }
 
@@ -422,6 +438,9 @@ TiProxy * DeepScanForProxyOfViewContainingPoint(UIView * targetView, CGPoint poi
 		UIImage *image = [[ImageLoader sharedLoader] loadImmediateImage:url];
 		cell.accessoryView = [[[UIImageView alloc] initWithImage:image] autorelease];
 	}
+    else {
+        cell.accessoryView = nil;
+    }
 }
 
 -(void)configureBackground:(UITableViewCell*)cell
@@ -603,10 +622,7 @@ TiProxy * DeepScanForProxyOfViewContainingPoint(UIView * targetView, CGPoint poi
 	NSArray* cellSubviews = [[cell contentView] subviews];
 	// Clear out the old cell view
 	for (UIView* view in cellSubviews) {
-		if ([view isKindOfClass:[TiUITableViewRowContainer class]]) {
-			[view removeFromSuperview];
-			break;
-		}
+		[view removeFromSuperview];
 	}
 }
 
@@ -620,15 +636,20 @@ TiProxy * DeepScanForProxyOfViewContainingPoint(UIView * targetView, CGPoint poi
 	{
 		UIView *contentView = cell.contentView;
 		CGRect rect = [contentView frame];
-		CGFloat rowWidth = [self sizeWidthForDecorations:rect.size.width forceResizing:NO];
-		CGFloat rowHeight = [self rowHeight:rowWidth];
-		rowHeight = [table tableRowHeight:rowHeight];
+        CGSize cellSize = [(TiUITableViewCell*)cell computeCellSize];
+		CGFloat rowWidth = cellSize.width;
+		CGFloat rowHeight = cellSize.height;
+
 		if (rowHeight < rect.size.height || rowWidth < rect.size.width)
 		{
 			rect.size.height = rowHeight;
 			rect.size.width = rowWidth;
 			contentView.frame = rect;
 		}
+        else if (CGSizeEqualToSize(rect.size, CGSizeZero)) {
+            rect.size = CGSizeMake(rowWidth, rowHeight);
+            [contentView setFrame:rect];
+        }
 		rect.origin = CGPointZero;
 		[rowContainerView release];
 		rowContainerView = [[TiUITableViewRowContainer alloc] initWithFrame:rect];
@@ -1001,7 +1022,7 @@ TiProxy * DeepScanForProxyOfViewContainingPoint(UIView * targetView, CGPoint poi
 					@"title", @"backgroundImage",
 					@"leftImage",@"hasDetail",@"hasCheck",@"hasChild",	
 					@"indentionLevel",@"selectionStyle",@"color",@"selectedColor",
-					@"height",@"width",@"backgroundColor",
+					@"height",@"width",@"backgroundColor",@"rightImage",
 					nil];
 	}
 	

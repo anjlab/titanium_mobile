@@ -43,14 +43,14 @@ NSString* const INADDR_ANY_token = @"INADDR_ANY";
 	// reachability runs on the current run loop so we need to make sure we're
 	// on the main UI thread
 	reachability = [[Reachability reachabilityForInternetConnection] retain];
-	[reachability startNotifer];
+    [reachability startNotifier];
 	[self updateReachabilityStatus];
 }
 
 -(void)stopReachability
 {
 	NSAssert([NSThread currentThread],@"not on the main thread for stopReachability");
-	[reachability stopNotifer];
+	[reachability stopNotifier];
 	RELEASE_TO_NIL(reachability);
 }
 
@@ -300,6 +300,8 @@ MAKE_SYSTEM_PROP(NOTIFICATION_TYPE_SOUND,3);
 
 #pragma mark Push Notification Delegates
 
+#ifdef USE_TI_NETWORKREGISTERFORPUSHNOTIFICATIONS
+
 -(void)application:(UIApplication *)application didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken
 {
 	// called by TiApp
@@ -332,6 +334,8 @@ MAKE_SYSTEM_PROP(NOTIFICATION_TYPE_SOUND,3);
 		[self _fireEventToListener:@"remote" withObject:event listener:pushNotificationError thisObject:nil];
 	}
 }
+
+#endif
 
 @end
 

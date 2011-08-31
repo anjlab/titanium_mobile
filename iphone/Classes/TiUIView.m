@@ -13,8 +13,8 @@
 #ifdef USE_TI_UI2DMATRIX	
 	#import "Ti2DMatrix.h"
 #endif
-#ifdef USE_TI_UI3DMATRIX	
-	#import "Ti3DMatrix.h"
+#ifdef USE_TI_UIIOS3DMATRIX
+	#import "TiUIiOS3DMatrix.h"
 #endif
 #import "TiViewProxy.h"
 #import "TiApp.h"
@@ -288,14 +288,6 @@ DEFINE_EXCEPTIONS
 
 #pragma mark Layout 
 
--(BOOL)animationFromArgument:(id)args
-{
-	// should happen already in completed callback but in case it didn't complete or was implicitly cancelled
-	RELEASE_TO_NIL(animation);
-	animation = [[TiAnimation animationFromArg:args context:[self.proxy pageContext] create:NO] retain];
-	return (animation!=nil);
-}
-
 -(void)frameSizeChanged:(CGRect)frame bounds:(CGRect)bounds
 {
 	// for subclasses to do crap
@@ -350,10 +342,10 @@ DEFINE_EXCEPTIONS
 		return;
 	}
 #endif
-#ifdef USE_TI_UI3DMATRIX	
-	if ([transformMatrix isKindOfClass:[Ti3DMatrix class]])
+#ifdef USE_TI_UIIOS3DMATRIX	
+	if ([transformMatrix isKindOfClass:[TiUIiOS3DMatrix class]])
 	{
-		self.layer.transform = CATransform3DConcat(CATransform3DMakeAffineTransform(virtualParentTransform),[(Ti3DMatrix*)transformMatrix matrix]);
+		self.layer.transform = CATransform3DConcat(CATransform3DMakeAffineTransform(virtualParentTransform),[(TiUIiOS3DMatrix*)transformMatrix matrix]);
 		return;
 	}
 #endif
@@ -405,6 +397,11 @@ DEFINE_EXCEPTIONS
 	self.alpha = [TiUtils floatValue:opacity];
 }
 
+-(CALayer *)backgroundImageLayer
+{
+	return [self layer];
+}
+
 -(void)setBackgroundImage_:(id)image
 {
 	NSURL *bgURL = [TiUtils toURL:image proxy:proxy];
@@ -420,8 +417,8 @@ DEFINE_EXCEPTIONS
 							 interpolationQuality:kCGInterpolationNone image:resultImage hires:NO];
 	}
 
-	self.layer.contents = (id)resultImage.CGImage;
-	self.layer.contentsCenter = TiDimensionLayerContentCenter(topCap, leftCap, topCap, leftCap, [resultImage size]);
+	[self backgroundImageLayer].contents = (id)resultImage.CGImage;
+	[self backgroundImageLayer].contentsCenter = TiDimensionLayerContentCenter(topCap, leftCap, topCap, leftCap, [resultImage size]);
 	self.clipsToBounds = image!=nil;
     self.backgroundImage = image;
 }
@@ -478,16 +475,14 @@ DEFINE_EXCEPTIONS
 	}
 }
 
--(void)setAnimation_:(id)arg
-{
-	[self.proxy replaceValue:nil forKey:@"animation" notification:NO];
-	[self animate:arg];
-}
-
 -(void)setTouchEnabled_:(id)arg
 {
 	self.userInteractionEnabled = [TiUtils boolValue:arg];
     changedInteraction = YES;
+}
+
+-(BOOL) touchEnabled {
+	return touchEnabled;
 }
 
 -(UIView *)gradientWrapperView
@@ -527,9 +522,8 @@ DEFINE_EXCEPTIONS
 	}
 }
 
--(void)animate:(id)arg
+-(void)animate:(TiAnimation *)newAnimation
 {
-	ENSURE_UI_THREAD(animate,arg);
 	RELEASE_TO_NIL(animation);
 	
 	if ([self.proxy isKindOfClass:[TiViewProxy class]] && [(TiViewProxy*)self.proxy viewReady]==NO)
@@ -544,20 +538,22 @@ DEFINE_EXCEPTIONS
 #endif		
 			return;
 		}
-		[self performSelector:@selector(animate:) withObject:arg afterDelay:0.01];
+		[self performSelector:@selector(animate:) withObject:newAnimation afterDelay:0.01];
 		return;
 	}
 	
 	animationDelayGuard = 0;
 
-	if ([self animationFromArgument:arg])
+	if (newAnimation != nil)
 	{
+		RELEASE_TO_NIL(animation);
+		animation = [newAnimation retain];
 		animating = YES;
 		[animation animate:self];
 	}	
 	else
 	{
-		NSLog(@"[WARN] animate called with %@ but couldn't make an animation object",arg);
+		NSLog(@"[WARN] animate called with %@ but couldn't make an animation object",newAnimation);
 	}
 }
 
@@ -758,11 +754,17 @@ DEFINE_EXCEPTIONS
 		return nil;
 	}
 	
+    // OK, this is problematic because of the situation where:
+    // touchDelegate --> view --> button
+    // The touch never reaches the button, because the touchDelegate is as deep as the touch goes.
+    
+    /*
 	// delegate to our touch delegate if we're hit but it's not for us
 	if (hasTouchListeners==NO && touchDelegate!=nil)
 	{
 		return touchDelegate;
 	}
+     */
 	
     return [super hitTest:point withEvent:event];
 }
@@ -1027,11 +1029,6 @@ DEFINE_EXCEPTIONS
 		handlesSwipes = YES;
 	}
 	
-	if (handlesTouches || handlesTaps || handlesSwipes)
-	{
-		self.userInteractionEnabled = YES;
-	}
-	
 	if (handlesTaps)
 	{
 		self.multipleTouchEnabled = YES;
@@ -1065,12 +1062,6 @@ DEFINE_EXCEPTIONS
 		[event isEqualToString:@"swipe"])
 	{
 		handlesSwipes = NO;
-	}
-	
-	if (handlesTaps == NO && handlesTouches == NO)
-	{
-		self.userInteractionEnabled = NO;
-		self.multipleTouchEnabled = NO;
 	}
 }
 

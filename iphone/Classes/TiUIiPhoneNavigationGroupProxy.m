@@ -17,7 +17,8 @@
 {
 	if (self = [super init])
 	{
-		//FIXME: review this with Blain as to why...
+		//This is done to insert the top line of the nav bar
+		//underneath the bottom line of the status bar.
 		layoutProperties.top = TiDimensionPixels(-1);
 	}
 	return self;
@@ -25,28 +26,32 @@
 
 -(void)open:(NSArray*)args
 {
-	ENSURE_UI_THREAD(open,args);
 	TiWindowProxy *window = [args objectAtIndex:0];
 	ENSURE_TYPE(window,TiWindowProxy);
+	[self rememberProxy:window];
+
+	ENSURE_UI_THREAD(open, args);
 	NSDictionary *properties = [args count] > 1 ? [args objectAtIndex:1] : [NSDictionary dictionary];
 	[[self view] performSelector:@selector(open:withObject:) withObject:window withObject:properties];
 }
 
 -(void)close:(NSArray*)args
 {
-	ENSURE_UI_THREAD(close,args);
-	
 	if ([args count]>0)
 	{
 		// we're closing a nav group window
 		
 		TiWindowProxy *window = [args objectAtIndex:0];
 		ENSURE_TYPE(window,TiWindowProxy);
+		ENSURE_UI_THREAD(close,args);
+
 		NSDictionary *properties = [args count] > 1 ? [args objectAtIndex:1] : [NSDictionary dictionary];
 		[[self view] performSelector:@selector(close:withObject:) withObject:window withObject:properties];
+		[self forgetProxy:window];
 	}
 	else 
 	{
+		ENSURE_UI_THREAD(close,args);	   
 		// we're closing the nav group itself
 		[[self view] performSelector:@selector(close)];
 		[self detachView];
@@ -102,6 +107,39 @@
 	[parentOrientationController childOrientationControllerChangedFlags:self];
 }
 
+-(void)windowDidClose
+{
+	WARN_IF_BACKGROUND_THREAD;
+	if ([self viewAttached]) {
+		[[self view] close];
+	}
+	[super windowDidClose];
+}
+
+/*
+ *	NavigationGroup was not made as a subclass of TiWindowProxy, which is our
+ *	analog/delegate/wrapper to native UIViewControllers (See TabGroup, etc).
+ *	A refactor along these lines should be done in the far future, as it will
+ *	help with window orientation, blur/focus, etc. However, it also would/should
+ *	depricate adding a navGroup to a window, preferring to open the navGroup
+ *	directly.
+ *
+ *	navGroup's willShow is the first step of this transition, to restore the
+ *	UIViewControllers' viewWill/DidAppear/Disappear event chain so that the root
+ *	view controller (And thus the root TiWindow) gets the proper focus event.
+ *	TODO: Make NavigationGroupProxy a full-fledged TiWindowProxy.
+ */
+
+-(void)willShow
+{
+	TiUIiPhoneNavigationGroup * ourView = (id)[self view];
+	UINavigationController * ourNC = [ourView controller];
+	UIViewController * ourVC = [ourNC topViewController];
+	
+	[ourView navigationController:ourNC willShowViewController:ourVC animated:NO];
+	[super willShow];
+	[ourView navigationController:ourNC didShowViewController:ourVC animated:NO];
+}
 
 @end
 

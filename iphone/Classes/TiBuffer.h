@@ -12,10 +12,11 @@
 // TODO: Support array-style access of bytes
 @interface TiBuffer : TiProxy {
     NSMutableData* data;
-    
+    NSNumber* byteOrder;
 }
 @property(nonatomic, retain) NSMutableData* data;
- 
+-(void)setByteOrder:(CFByteOrder)byteOrder_;
+
 // Public API
 -(NSNumber*)append:(id)args;
 -(NSNumber*)insert:(id)args;
@@ -23,14 +24,14 @@
 -(TiBuffer*)clone:(id)args;
 -(void)fill:(id)args;
 
--(NSNumber*)clear:(id)_void;
--(NSNumber*)release:(id)_void;
+-(void)clear:(id)_void;
+-(void)release:(id)_void;
 
 -(TiBlob*)toBlob:(id)_void;
 -(NSString*)toString:(id)_void;
 
 @property(nonatomic,assign) NSNumber* length;
-
+@property(nonatomic,readonly) NSNumber* byteOrder;
 // SPECIAL NOTES:
 // Ti.Buffer objects have an 'overloaded' Ti.Buffer[x] operation for x==int (making them behave like arrays).
 // See the code for how this works.

@@ -1,6 +1,6 @@
 /**
  * Appcelerator Titanium Mobile
- * Copyright (c) 2010 by Appcelerator, Inc. All Rights Reserved.
+ * Copyright (c) 2010-2011 by Appcelerator, Inc. All Rights Reserved.
  * Licensed under the terms of the Apache Public License
  * Please see the LICENSE included with this distribution for details.
  */
@@ -19,6 +19,7 @@
 #pragma mark Setup
 -(void)dealloc
 {
+	[viewController setProxy:nil];
 	RELEASE_TO_NIL(viewController);
 	RELEASE_TO_NIL(navigationController);
 	RELEASE_TO_NIL(popoverController);
@@ -179,6 +180,7 @@
 -(void)show:(id)args
 {
 	ENSURE_SINGLE_ARG_OR_NIL(args,NSDictionary);
+	[self rememberSelf];
 	ENSURE_UI_THREAD_1_ARG(args);
 	
 	NSDictionary *rectProps = [args objectForKey:@"rect"];
@@ -282,15 +284,11 @@
 	[self fireEvent:@"hide" withObject:nil]; //Checking for listeners are done by fireEvent anyways.
 	[[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillChangeStatusBarOrientationNotification object:nil];
 	[self windowDidClose];
+	[self forgetSelf];
 	RELEASE_TO_NIL(viewController);
 	RELEASE_TO_NIL_AUTORELEASE(popoverController);
 	RELEASE_TO_NIL(navigationController);
 	[self performSelector:@selector(release) withObject:nil afterDelay:0.5];
-}
-
-- (UIViewController *)childViewController;
-{
-	return nil;
 }
 
 -(BOOL)suppressesRelayout
@@ -298,6 +296,32 @@
 	return YES;
 }
 
+- (UIViewController *)childViewController;
+{
+	return nil;
+}
+
+/*	
+ *	The viewWill/DidAppear/Disappear functions are here to conform to the
+ *	TIUIViewController protocol, but currently do nothing. In the future they
+ *	may pass the events onto the children. But whether that's needed or not
+ *	requires research. TODO: Research popover actions for view transitions
+ */
+- (void)viewWillAppear:(BOOL)animated
+{
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+}
+
+- (void)viewWillDisappear:(BOOL)animated
+{
+}
+
+- (void)viewDidDisappear:(BOOL)animated
+{
+}
 
 @end
 #endif

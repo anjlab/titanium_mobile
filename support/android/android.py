@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
+# Appcelerator Titanium Mobile
+# Copyright (c) 2011 by Appcelerator, Inc. All Rights Reserved.
+# Licensed under the terms of the Apache Public License
+# Please see the LICENSE included with this distribution for details.
+#
 # Android Application Script
 #
 
@@ -56,7 +61,6 @@ class Android(object):
 
 	def __init__(self, name, myid, sdk, deploy_type, java):
 		self.name = name
-		
 		# android requires at least one dot in packageid
 		if len(re.findall(r'\.',myid))==0:
 			myid = 'com.%s' % myid
@@ -154,11 +158,12 @@ class Android(object):
 			else:
 				self.render(template_dir, 'JSService.java', app_package_dir, service['classname']+'.java', service=service)
 
-	def build_modules_info(self, resources_dir, app_bin_dir):
+	def build_modules_info(self, resources_dir, app_bin_dir, include_all_ti_modules=False):
 		self.app_modules = []
 		(modules, external_child_modules) = bindings.get_all_module_bindings()
 		
-		compiler = Compiler(self.tiapp, resources_dir, self.java, app_bin_dir, os.path.dirname(app_bin_dir))
+		compiler = Compiler(self.tiapp, resources_dir, self.java, app_bin_dir, os.path.dirname(app_bin_dir),
+				include_all_modules=include_all_ti_modules)
 		compiler.compile(compile_bytecode=False, info_message=None)
 		for module in compiler.modules:
 			module_bindings = []
@@ -166,13 +171,16 @@ class Android(object):
 			for method in compiler.module_methods:
 				if method.lower().startswith(module+'.') and '.' not in method:
 					module_bindings.append(method[len(module)+1:])
-			
+
+			module_onAppCreate = None
 			module_class = None
 			module_apiName = None
 			for m in modules.keys():
 				if modules[m]['fullAPIName'].lower() == module:
 					module_class = m
 					module_apiName = modules[m]['fullAPIName']
+					if 'onAppCreate' in modules[m]:
+						module_onAppCreate = modules[m]['onAppCreate']
 					break
 			
 			if module_apiName == None: continue # module wasn't found
@@ -186,7 +194,8 @@ class Android(object):
 					'api_name': module_apiName,
 					'class_name': module_class,
 					'bindings': module_bindings,
-					'external_child_modules': ext_modules
+					'external_child_modules': ext_modules,
+					'on_app_create': module_onAppCreate
 				})
 		
 		# discover app modules
@@ -202,16 +211,22 @@ class Android(object):
 			if module_bindings is None: continue
 			
 			for module_class in module_bindings['modules'].keys():
-				module_id = module_bindings['proxies'][module_class]['proxyAttrs']['id']
+				module_proxy = module_bindings['proxies'][module_class]
+				module_id = module_proxy['proxyAttrs']['id']
+				module_onAppCreate = None
+				if 'onAppCreate' in module_proxy:
+					module_onAppCreate = module_proxy['onAppCreate']
+
 				print '[DEBUG] module_id = %s' % module_id
 				if module_id == module.manifest.moduleid:
 					print '[DEBUG] appending module: %s' % module_class
 					self.custom_modules.append({
 						'class_name': module_class,
-						'manifest': module.manifest
+						'manifest': module.manifest,
+						'on_app_create': module_onAppCreate
 					})
 		
-	def create(self, dir, build_time=False, project_dir=None):
+	def create(self, dir, build_time=False, project_dir=None, include_all_ti_modules=False):
 		template_dir = os.path.dirname(sys._getframe(0).f_code.co_filename)
 		
 		# Build up output directory tree
@@ -250,7 +265,7 @@ class Android(object):
 		app_bin_assets_dir = self.newdir(app_bin_dir, 'assets')
 		
 		self.build_app_info(project_dir)
-		self.build_modules_info(resource_dir, app_bin_dir)
+		self.build_modules_info(resource_dir, app_bin_dir, include_all_ti_modules=include_all_ti_modules)
 		
 		# Create android source
 		self.render(template_dir, 'AppInfo.java', app_package_dir, self.config['classname'] + 'AppInfo.java',

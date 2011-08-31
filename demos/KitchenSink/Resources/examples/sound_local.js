@@ -7,6 +7,7 @@ var win = Titanium.UI.currentWindow;
 //TODO: USE OBJECT
 var sound = Titanium.Media.createSound();
 sound.url='../cricket.wav'; // For testing #1913
+sound.preload = true;
 
 //
 // PLAY
@@ -112,10 +113,11 @@ volumeDown.addEventListener('click', function()
 {
 	if (sound.volume > 0)
 	{
-		if (sound.volume < 0.1)
+		if (sound.volume < 0.1){
 			sound.volume = 0;
-		else
+		} else {
 			sound.volume -= 0.1;
+		}
 		var roundedVolume = Math.round(sound.volume*1000)/1000;
 		volumeDown.title = 'Volume-- (' + roundedVolume + ')';
 		volumeUp.title = 'Volume++';
@@ -136,7 +138,7 @@ var looping = Titanium.UI.createButton({
 });
 looping.addEventListener('click', function()
 {
-	sound.looping = (sound.looping==false)?true:false;
+	sound.looping = (sound.looping === false)?true:false;
 	looping.title = 'Looping (' + sound.isLooping() + ')';
 });
 win.add(looping);

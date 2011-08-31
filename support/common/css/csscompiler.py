@@ -59,6 +59,12 @@ CSS_MAPPINGS = {
 	u'background-color':u'backgroundColor'
 }
 
+def update_dict_of_dict(orig, to_add):
+	for key in to_add:
+		if key in orig:
+			orig[key].update(to_add[key])
+		else:
+			orig[key] = to_add[key].copy()
 
 class CSSCompiler(object):
 	
@@ -70,17 +76,37 @@ class CSSCompiler(object):
 		if self.platform == 'universal':
 			return key == 'ios' or key == 'ipad' or key == 'iphone'
 		return self.platform == key
-	
-	def __init__(self,dir,platform,appid):
+
+	def is_platform_ios(self):
+		return self.platform in ["iphone", "ipad", "ios", "universal"]
+
+	def is_platform_dir(self, dir):
+		platform_dirs = [os.path.join(self.dir, p) for p in ["iphone", "android", "blackberry"]]
+
+		if dir in platform_dirs:
+			basename = os.path.basename(dir)
+			if self.is_platform_ios() and basename == "iphone":
+				return True
+			elif self.platform == basename:
+				return True
+			# Only return false if this is actually a platform directory, but *NOT* the specified platform
+			# We still want to copy from directories that are non-platform (hence the "return True" catch all)
+			return False
+		return True
+
+	def __init__(self, dir, platform, appid):
 		self.dir = dir
 		self.platform = platform
 		self.appid = appid
 		self.files = {}
 		
-		for dirname,dirs,files in os.walk(dir):
+		for root, dirs, files in os.walk(dir):
+			if not self.is_platform_dir(root):
+				continue
 			for name in ignoreDirs:
 				if name in dirs:
-					dirs.remove(name)	# don't visit ignored directories			  
+					# don't visit ignored directories
+					dirs.remove(name)
 			for f in files:
 				if f in ignoreFiles: continue
 				if not f.endswith('.jss'): continue
@@ -94,11 +120,11 @@ class CSSCompiler(object):
 				if self.files.has_key(tok[0]):
 					dict = self.files[tok[0]]
 				if count == 1:
-					dict['base'] = os.path.join(dirname,f)
+					dict['base'] = os.path.join(root, f)
 				elif count == 2:
-					dict['platform'] = os.path.join(dirname,f)
+					dict['platform'] = os.path.join(root, f)
 				elif count == 3:
-					dict['density'][tok[2]] = os.path.join(dirname,f)
+					dict['density'][tok[2]] = os.path.join(root, f)
 				
 				self.files[tok[0]] = dict
 		
@@ -143,13 +169,13 @@ class CSSCompiler(object):
 			self.code = self.generate_ios_code(self.classes,self.classes_density,self.ids,self.ids_density,self.tags,self.tags_density)
 		elif self.platform == 'android':
 			#merge classes and tags for backward compatibility with current Android implementation
-			self.classes.update(self.tags)
-			self.classes_density.update(self.tags_density)
+			update_dict_of_dict(self.classes, self.tags)
+			update_dict_of_dict(self.classes_density, self.tags_density)
 			self.code = self.generate_android_code(self.classes,self.classes_density,self.ids,self.ids_density)
 		elif self.platform == 'blackberry':
 			#merge classes and tags for backward compatibility with current BB implementation
-			self.classes.update(self.tags)
-			self.classes_density.update(self.tags_density)
+			update_dict_of_dict(self.classes, self.tags)
+			update_dict_of_dict(self.classes_density, self.tags_density)
 			self.code = self.generate_bb_code(self.classes,self.classes_density,self.ids,self.ids_density)
 		
 	def transform_fonts(self,dict):

@@ -12,7 +12,11 @@ android_api_levels = {
 	4: 'android-1.6',
 	5: 'android-2.0',
 	6: 'android-2.0.1',
-	7: 'android-2.1'
+	7: 'android-2.1',
+	8: 'android-2.2',
+	9: 'android-2.3',
+	10: 'android-2.3.3',
+	11: 'android-3.0'
 }
 
 class Device:
@@ -172,6 +176,13 @@ class AndroidSDK:
 		return self.get_sdk_tool('zipalign')
 
 	def get_aapt(self):
+		# for aapt (and maybe eventually for others) we
+		# want to favor platform-tools over android-x/tools
+		# because of new resource qualifiers for honeycomb
+		sdk_platform_tools_dir = self.get_sdk_platform_tools_dir()
+		if not sdk_platform_tools_dir is None and os.path.exists(os.path.join(sdk_platform_tools_dir, 'aapt')):
+			return os.path.join(sdk_platform_tools_dir, 'aapt')
+
 		return self.get_platform_tool('aapt')
 
 	def get_apkbuilder(self):

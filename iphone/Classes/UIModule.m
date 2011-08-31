@@ -14,9 +14,11 @@
 #ifdef USE_TI_UI2DMATRIX
 	#import "Ti2DMatrix.h"
 #endif
+
 #ifdef USE_TI_UI3DMATRIX
-	#import "Ti3DMatrix.h"
+    #import "TiUIiOS3DMatrix.h"
 #endif
+
 #ifdef USE_TI_UIANIMATION
 	#import "TiAnimation.h"
 #endif
@@ -31,6 +33,9 @@
 #endif
 #ifdef USE_TI_UICLIPBOARD
 #import "TiUIClipboardProxy.h"
+#endif
+#ifdef USE_TI_UICOVERFLOWVIEW
+	#import "TiUIiOSCoverFlowViewProxy.h"
 #endif
 #import "TiApp.h"
 #import "ImageLoader.h"
@@ -209,18 +214,6 @@ MAKE_SYSTEM_PROP_IOS4(AUTODETECT_CALENDAR,UIDataDetectorTypeCalendarEvent,UIData
 }
 #endif
 
-#ifdef USE_TI_UI3DMATRIX
--(id)create3DMatrix:(id)args
-{
-	if (args==nil || [args count] == 0)
-	{
-		return [[[Ti3DMatrix alloc] init] autorelease];
-	}
-	ENSURE_SINGLE_ARG(args,NSDictionary);
-	Ti3DMatrix *matrix = [[Ti3DMatrix alloc] initWithProperties:args];
-	return [matrix autorelease];
-}
-#endif
 
 #ifdef USE_TI_UIANIMATION
 -(id)createAnimation:(id)args
@@ -236,7 +229,7 @@ MAKE_SYSTEM_PROP_IOS4(AUTODETECT_CALENDAR,UIDataDetectorTypeCalendarEvent,UIData
 			return a;
 		}
 	}
-	return [[[TiAnimation alloc] _initWithPageContext:[self pageContext]] autorelease];
+	return [[[TiAnimation alloc] _initWithPageContext:[self executionContext]] autorelease];
 }
 #endif
 
@@ -278,7 +271,7 @@ MAKE_SYSTEM_PROP(FACE_DOWN,UIDeviceOrientationFaceDown);
 	if (iphone==nil)
 	{
 		// cache it since it's used alot
-		iphone = [[TiUIiPhoneProxy alloc] _initWithPageContext:[self pageContext]];
+		iphone = [[TiUIiPhoneProxy alloc] _initWithPageContext:[self executionContext]];
 	}
 	return iphone;
 }
@@ -292,7 +285,7 @@ MAKE_SYSTEM_PROP(FACE_DOWN,UIDeviceOrientationFaceDown);
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
 		if ([TiUtils isiPhoneOS3_2OrGreater] && [TiUtils isIPad])
 		{
-			ipad = [[TiUIiPadProxy alloc] _initWithPageContext:[self pageContext]];
+			ipad = [[TiUIiPadProxy alloc] _initWithPageContext:[self executionContext]];
 		}
 #endif
 	}
@@ -308,11 +301,25 @@ MAKE_SYSTEM_PROP(FACE_DOWN,UIDeviceOrientationFaceDown);
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
 		if ([TiUtils isiPhoneOS3_2OrGreater])
 		{
-			ios = [[TiUIiOSProxy alloc] _initWithPageContext:[self pageContext]];
+			ios = [[TiUIiOSProxy alloc] _initWithPageContext:[self executionContext]];
 		}
 #endif
 	}
 	return ios;
+}
+#endif
+
+#ifdef USE_TI_UI3DMATRIX
+ -(id)create3DMatrix:(id)args
+{
+    DEPRECATED_REPLACED(@"UI.create3DMatrix()", @"1.8.0", @"1.9.0", @"UI.iOS.create3DMatrix()");
+    if (args==nil || [args count] == 0)
+	{
+	    return [[[TiUIiOS3DMatrix alloc] init] autorelease];
+	}
+ 	ENSURE_SINGLE_ARG(args,NSDictionary);
+ 	TiUIiOS3DMatrix *matrix = [[TiUIiOS3DMatrix alloc] initWithProperties:args];
+ 	return [matrix autorelease];
 }
 #endif
 
@@ -321,9 +328,17 @@ MAKE_SYSTEM_PROP(FACE_DOWN,UIDeviceOrientationFaceDown);
 {
 	if (clipboard==nil)
 	{
-		clipboard = [[TiUIClipboardProxy alloc] _initWithPageContext:[self pageContext]];
+		clipboard = [[TiUIClipboardProxy alloc] _initWithPageContext:[self executionContext]];
 	}
 	return clipboard;
+}
+#endif
+
+#ifdef USE_TI_UICOVERFLOWVIEW
+-(id)createCoverFlowView:(id)args
+{
+	DEPRECATED_REPLACED(@"UI.createCoverFlowView()",@"1.8.0",@"1.9.0",@"UI.iOS.createCoverFlowView()");
+	return [[[TiUIiOSCoverFlowViewProxy alloc] _initWithPageContext:[self executionContext] args:args] autorelease];
 }
 #endif
 

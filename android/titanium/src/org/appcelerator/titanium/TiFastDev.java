@@ -6,18 +6,25 @@
  */
 package org.appcelerator.titanium;
 
-import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.Arrays;
 
 import org.appcelerator.titanium.util.Log;
+import org.appcelerator.titanium.util.TiConfig;
+import org.appcelerator.titanium.util.TiStreamHelper;
+import org.appcelerator.titanium.util.TiTempFileHelper;
 
 import android.content.Context;
+import android.content.Intent;
+import android.os.Looper;
 import android.os.Process;
 import android.widget.Toast;
 
@@ -29,12 +36,19 @@ import android.widget.Toast;
 public class TiFastDev
 {
 	private static final String TAG = "TiFastDev";
-	private static TiFastDev _instance;
-	private static final int FASTDEV_PORT = 7999;
+	private static final boolean DBG = TiConfig.LOGD;
 
+	private static TiFastDev _instance;
+	private static final String EMULATOR_HOST = "10.0.2.2";
+	private static final int FASTDEV_PORT = 7999;
+	private static final String TEMP_FILE_PREFIX = "tifastdev";
+	private static final String TEMP_FILE_SUFFIX = "tmp";
+
+	public static final String COMMAND_LENGTH = "length";
 	public static final String COMMAND_GET = "get";
 	public static final String COMMAND_HANDSHAKE = "handshake";
 	public static final String COMMAND_KILL = "kill";
+	public static final String COMMAND_RESTART = "restart";
 	public static final String COMMAND_SHUTDOWN = "shutdown";
 
 	public static final String UTF8_CHARSET = "UTF-8";
@@ -54,10 +68,17 @@ public class TiFastDev
 	protected String urlPrefix;
 	protected Socket fastDevSocket;
 	protected Session session;
+	protected boolean restarting = false;
+	protected TiTempFileHelper tempHelper;
 
 	public TiFastDev()
 	{
 		TiApplication app = TiApplication.getInstance();
+		if (app == null) {
+			return;
+		}
+
+		tempHelper = app.getTempFileHelper();
 		if (app.isFastDevMode()) {
 			TiDeployData deployData = app.getDeployData();
 			if (deployData != null) {
@@ -78,11 +99,14 @@ public class TiFastDev
 	{
 		port = deployData.getFastDevPort();
 		listen = deployData.getFastDevListen();
-		Log.d(TAG, "Enabling Fastdev mode, port: " + port + ", listen: " + listen);
 		if (listen) {
+			Log.d(TAG, "Enabling Fastdev in listening mode...");
 			acceptConnection();
-		} else {
+		} else if (port != -1) {
+			Log.d(TAG, "Enabling Fastdev on port " + port);
 			connect();
+		} else {
+			enabled = false;
 		}
 	}
 
@@ -101,7 +125,7 @@ public class TiFastDev
 	protected void connect()
 	{
 		try {
-			fastDevSocket = new Socket("10.0.2.2", port);
+			fastDevSocket = new Socket(EMULATOR_HOST, port);
 		} catch (Exception e) {
 			Log.w(TAG, e.getMessage(), e);
 			enabled = false;
@@ -109,13 +133,19 @@ public class TiFastDev
 		}
 	}
 
+	protected void showToast(String message)
+	{
+		if (Looper.myLooper() == null) {
+			Looper.prepare();
+		}
+		Context ctx = TiApplication.getInstance().getRootActivity();
+		Toast toast = Toast.makeText(ctx, message, Toast.LENGTH_LONG);
+		toast.show();
+	}
+
 	protected void showDisabledWarning(Exception e)
 	{
-		Context ctx = TiApplication.getInstance().getRootActivity();
-		Toast toast = Toast.makeText(ctx,
-			"Warning: FastDev mode is disabled. Error Message: " + e.getMessage(),
-			Toast.LENGTH_LONG);
-		toast.show();
+		showToast("Warning: FastDev mode is disabled. Error Message: " + e.getMessage());
 	}
 
 	public String toURL(String relativePath)
@@ -123,15 +153,48 @@ public class TiFastDev
 		return urlPrefix + "/" + relativePath;
 	}
 
+	public int getLength(String relativePath)
+	{
+		byte result[][] = session.sendMessage(COMMAND_LENGTH, relativePath);
+		if (result != null && result.length > 0) {
+			return session.toInt(result[0]);
+		}
+		return -1;
+	}
+
 	public InputStream openInputStream(String relativePath)
 	{
-		byte tokens[][] = session.sendMessage(COMMAND_GET, relativePath);
-		if (tokens == null) {
-			return null;
-		}
+		synchronized (session) {
+			session.checkingForMessage = false;
+			session.sendTokens(COMMAND_GET, relativePath);
 
-		ByteArrayInputStream dataStream = new ByteArrayInputStream(tokens[0]);
-		return dataStream;
+			int tokenCount = session.readTokenCount();
+			if (tokenCount < 1) {
+				return null;
+			}
+	
+			int length = session.readInt();
+			if (length <= 0) {
+				return null;
+			}
+
+			try {
+				// Pull immediately to a temporary file so we avoid tying up
+				// the connection if the app is doing a long-running task with the file.
+				File tempFile = tempHelper.createTempFile(TEMP_FILE_PREFIX, TEMP_FILE_SUFFIX);
+				FileOutputStream tempOut = new FileOutputStream(tempFile);
+				TiStreamHelper.pumpCount(session.getInputStream(), tempOut, length);
+				tempOut.close();
+
+				session.checkingForMessage = true;
+				return new FileInputStream(tempFile);
+			} catch (FileNotFoundException e) {
+				Log.e(TAG, e.getMessage(), e);
+			} catch (IOException e) {
+				Log.e(TAG, e.getMessage(), e);
+			}
+		}
+		return null;
 	}
 
 	public static boolean isFastDevEnabled()
@@ -141,10 +204,15 @@ public class TiFastDev
 
 	public static void onDestroy()
 	{
-		TiFastDev fastdev = getInstance();
-		if (fastdev.session != null) {
-			fastdev.session.close();
-			fastdev.session = null;
+		// onDestroy will be called after the new activity is launched
+		// so protect the new instance here
+		if (_instance != null && _instance.restarting) {
+			_instance.restarting = false;
+			return;
+		}
+		if (_instance != null && _instance.session != null) {
+			_instance.session.close();
+			_instance.session = null;
 		}
 		_instance = null;
 	}
@@ -174,6 +242,11 @@ public class TiFastDev
 			} catch (IOException e) {
 				Log.e(TAG, e.getMessage(), e);
 			}
+		}
+
+		public InputStream getInputStream()
+		{
+			return in;
 		}
 
 		protected boolean blockRead(byte[] buffer)
@@ -215,15 +288,21 @@ public class TiFastDev
 			return bytes;
 		}
 
+		protected int readInt()
+		{
+			byte buffer[] = new byte[4];
+			if (blockRead(buffer)) {
+				return toInt(buffer);
+			}
+			return -1;
+		}
+
 		protected byte[] readToken()
 		{
-			byte lenBuffer[] = new byte[4];
-			if (blockRead(lenBuffer)) {
-				int length = toInt(lenBuffer);
-				System.out.println("read length: " + length + ", buffer: " + Arrays.toString(lenBuffer));
+			int length = readInt();
+			if (length > 0) {
 				byte tokenData[] = new byte[length];
 				if (blockRead(tokenData)) {
-					System.out.println("read data: " + new String(tokenData));
 					return tokenData;
 				}
 			}
@@ -234,6 +313,9 @@ public class TiFastDev
 		{
 			while (connected) {
 				try {
+					if (DBG) {
+						Log.d(TAG, "checking for message? " + checkingForMessage);
+					}
 					if (checkingForMessage) {
 						if (in.available() > 0) {
 							byte message[][] = readMessage();
@@ -271,14 +353,20 @@ public class TiFastDev
 			}
 		}
 
+		protected int readTokenCount()
+		{
+			int tokenCount = readInt();
+			if (tokenCount > 0) {
+				if (tokenCount > MAX_TOKEN_COUNT) return -1;
+				return tokenCount;
+			}
+			return -1;
+		}
+
 		protected byte[][] readMessage()
 		{
-			byte tokenBuffer[] = new byte[4];
-			if (blockRead(tokenBuffer)) {
-				int tokenCount = toInt(tokenBuffer);
-				System.out.println("read token count: " + tokenCount + ", buffer: " + Arrays.toString(tokenBuffer));
-
-				if (tokenCount > MAX_TOKEN_COUNT) return null;
+			int tokenCount = readTokenCount();
+			if (tokenCount > 0) {
 				byte tokens[][] = new byte[tokenCount][];
 				for (int i = 0; i < tokenCount; i++) {
 					tokens[i] = readToken();
@@ -292,14 +380,43 @@ public class TiFastDev
 		{
 			try {
 				String command = new String(message[0], UTF8_CHARSET);
+				if (DBG) {
+					Log.d(TAG, "Execute command: " + command);
+				}
 				if (COMMAND_KILL.equals(command)) {
-					Log.d(TAG, "Killing app from Fastdev server request");
-					sendTokens(RESULT_OK);
-					Process.killProcess(Process.myPid());
+					executeKill();
+				}
+				else if (COMMAND_RESTART.equals(command)) {
+					executeRestart();
 				}
 			} catch (UnsupportedEncodingException e) {
 				Log.e(TAG, e.getMessage(), e);
 			}
+		}
+
+		protected void executeKill()
+		{
+			String message ="Killing app from Fastdev server request";
+			Log.w(TAG, message);
+			showToast(message);
+
+			sendTokens(RESULT_OK);
+			Process.killProcess(Process.myPid());
+		}
+
+		protected void executeRestart()
+		{
+			String message = "Restarting app from Fastdev server request";
+			Log.w(TAG, message);
+			showToast(message);
+			restarting = true;
+
+			sendTokens(RESULT_OK);
+			TiApplication app = TiApplication.getInstance();
+			Intent i = app.getPackageManager().getLaunchIntentForPackage(app.getPackageName());
+			i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+			i.addCategory(Intent.CATEGORY_LAUNCHER);
+			app.getRootActivity().startActivity(i);
 		}
 
 		protected boolean sendTokens(String... tokens)
@@ -323,7 +440,6 @@ public class TiFastDev
 		public synchronized byte[][] sendMessage(String... tokens)
 		{
 			checkingForMessage = false;
-			System.out.println("send message: " + Arrays.toString(tokens));
 			if (sendTokens(tokens)) {
 				byte message[][] = readMessage();
 				Log.d(TAG, "sent tokens successfully");
@@ -341,6 +457,7 @@ public class TiFastDev
 			if (fastDevSocket != null) {
 				try {
 					fastDevSocket.close();
+					fastDevSocket = null;
 				} catch (IOException e) {
 					Log.e(TAG, e.getMessage(), e);
 				}
